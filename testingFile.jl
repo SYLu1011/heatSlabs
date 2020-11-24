@@ -22,3 +22,11 @@ function quad_tst1v(x::Array{Float64,2}, v::Array{Float64,1})::Nothing
 
     return nothing
 end
+
+
+# Iterate relations for reflection and transmission coefficients. 
+
+# Expanded coefficient 
+expCff[ind + 1] = expCff[ind] + grpCff[ind] * refUpd[ind] 
+
+grpCff[ind + 1] = grpCff[ind]  + expCff[ind] * refUpd[ind]

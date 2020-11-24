@@ -1,10 +1,10 @@
-module FilmUtilities
-using QuadGK
+# module FilmUtilities
+using Cubature
 export lyrDsc, femFlx, plnFnc, flxPfc, flxFncPR
 ## Constants
-# Order parameter for quadgk.
+# Order parameter for cubature.
 const qudOrd = 32
-# Relative tolerance for quadgk.
+# Relative tolerance for cubature.
 const relTol = 1.0e-3
 # Cutoff for unbounded integrals tan and atan variable transforms.
 # tan(pi/2 - intDltInf) scaling. 
@@ -145,11 +145,11 @@ function flxPfc(lVar::lyrDsc, lPair::Tuple{Int64,Int64}, enr::Float64)::Float64
 end
 """
 
-	prpCyc(dst::Float64, rsp::ComplexF64, wvc::Float64)::ComplexF64
+	prpLyr(dst::Float64, rsp::ComplexF64, wvc::Float64)::ComplexF64
 
 Calculation of phase accumulation under propagation, distance assumed to be in units of wavelength.
 """
-function prpCyc(dst::Float64, rsp::ComplexF64, wvc::Float64)::ComplexF64
+function prpLyr(dst::Float64, rsp::ComplexF64, wvc::Float64)::ComplexF64
 
 	return exp(2.0 * pi * im * wvcPrp(rsp, dst, wvc) * dst)
 end
@@ -190,12 +190,14 @@ function strTck(lVar::lyrDsc, enr::Float64)::Float64
 end
 """
 
-	xfrBdr(wvc::Float64, kPrp::NTuple{2,ComplexF64}, rsp::NTuple{2,ComplexF64})::Array{ComplexF64,1}
+	xfrBdr(kPrp::NTuple{2,ComplexF64}, rsp::NTuple{2,ComplexF64})::Array{ComplexF64,1}
 
-Isotopic electric reflection and transmission coefficients for a interface 
-between two half spaces. 
-First entry in the rsp permittivity tuple is consider to be incident. 
-The first two returned entries are for 'p' polarized waves, the next two for 's' polarized waves. 
+Isotopic electric reflection and transmission coefficients for 
+a interface between two half spaces. 
+First entry in the rsp permittivity tuple is consider to be 
+incident. 
+The first two returned entries are for 'p' polarized waves, 
+the next two for 's' polarized waves. 
 Odd numbers are transmission, even modes are reflection.
 """
 function xfrBdr(wvc::Float64, kPrp::NTuple{2,ComplexF64}, rsp::NTuple{2,ComplexF64})::Array{ComplexF64,1}
@@ -204,31 +206,97 @@ function xfrBdr(wvc::Float64, kPrp::NTuple{2,ComplexF64}, rsp::NTuple{2,ComplexF
 	return [/(2.0 * zSqrt(rsp[1] * rsp[2]) * kPrp[1], rsp[1] * kPrp[2] + rsp[2] * kPrp[1]), /(rsp[1] * kPrp[2] - rsp[2] * kPrp[1], rsp[1] * kPrp[2] + rsp[2] * kPrp[1]), /(2.0 * kPrp[1], kPrp[2] + kPrp[1]), /(kPrp[2] - kPrp[1], kPrp[2] + kPrp[1])]
 end
 """
-	
-	function xfrflmInc!(lVar::lyrDsc, enr::Float64, wvc::Float64, lNum::Int, mode::Int, xfrArr::Array{ComplexF64,1})::Nothing
 
-Updates electric transfer coefficients under the addition a layer.
-If the mode is one, the increment is ``added on the right'', i.e. building from the left, if the 
-mode is two, the increment is ``added on the left'', i.e. building from the right.
+	bdrFill!(lVar::lyrDsc, enr::Float64, wvc::Float64, mode::Int, bdrArr::Array{ComplexF64,2})::Nothing
+
+Fills bdrArr all individual boundary transfer coefficients, 
+i.e. as though every boundary were between half-spaces. 
 """
-function xfrFlmInc!(lVar::lyrDsc, enr::Float64, wvc::Float64, lNum::Int, mode::Int, xfrArr::Array{ComplexF64,1})::Nothing
+# If mode == 1 smaller indices are treated as initial. 
+# If mode == 2 larger indices are treated as initial.
+# Convention for bdrArr as described for xfrBdr. 
+function bdrFill!(lVar::lyrDsc, enr::Float64, wvc::Float64, mode::Int, bdrArr::Array{ComplexF64,2})::Nothing
 
-	# Layer polarization response.
 	if mode == 1
-		# Interface field coefficients
-		xfrItfA = xfrBdr(wvc, (wvcPrp(lVar.rspPrf[lNum](enr), lyrTckRel(lVar, lNum, enr), wvc), wvcPrp(lVar.rspPrf[lNum - 1](enr), lyrTckRel(lVar, lNum - 1, enr), wvc)), (lVar.rspPrf[lNum](enr), lVar.rspPrf[lNum - 1](enr)))
-		xfrItfB = xfrBdr(wvc, (wvcPrp(lVar.rspPrf[lNum - 1](enr), lyrTckRel(lVar, lNum - 1, enr), wvc), wvcPrp(lVar.rspPrf[lNum](enr), lyrTckRel(lVar, lNum, enr), wvc)), (lVar.rspPrf[lNum - 1](enr), lVar.rspPrf[lNum](enr)))
-		# Layer phase accumulation.
-		prpC = prpCyc(lyrTckRel(lVar, lNum - 1, enr), lVar.rspPrf[lNum - 1](enr), wvc)
+
+		for bdr = 1:length(lVar.bdrLoc)
+
+			bdrArr[:,bdr] .= xfrBdr(wvc, (wvcPrp(lVar.rspPrf[bdr](enr), lyrTckRel(lVar, bdr, enr), wvc), wvcPrp(lVar.rspPrf[bdr + 1](enr), lyrTckRel(lVar, bdr + 1, enr), wvc)), (lVar.rspPrf[bdr](enr), lVar.rspPrf[bdr + 1](enr)))
+		end
+	elseif mode == 2
+
+		for bdr = 1:length(lVar.bdrLoc)
+			
+			bdrArr[:,bdr] .= xfrBdr(wvc, (wvcPrp(lVar.rspPrf[bdr + 1](enr), lyrTckRel(lVar, bdr + 1, enr), wvc), wvcPrp(lVar.rspPrf[bdr](enr), lyrTckRel(lVar, bdr, enr), wvc)), (lVar.rspPrf[bdr + 1](enr), lVar.rspPrf[bdr](enr)))
+		end
 	else
-		# Interface field coefficients
-		xfrItfA = xfrBdr(wvc, (wvcPrp(lVar.rspPrf[lNum](enr), lyrTckRel(lVar, lNum, enr), wvc), wvcPrp(lVar.rspPrf[lNum + 1](enr), lyrTckRel(lVar, lNum + 1, enr), wvc)), (lVar.rspPrf[lNum](enr), lVar.rspPrf[lNum + 1](enr)))
-		xfrItfB = xfrBdr(wvc, (wvcPrp(lVar.rspPrf[lNum + 1](enr), lyrTckRel(lVar, lNum + 1, enr), wvc), wvcPrp(lVar.rspPrf[lNum](enr), lyrTckRel(lVar, lNum, enr), wvc)), (lVar.rspPrf[lNum + 1](enr), lVar.rspPrf[lNum](enr)))
-		# Layer phase accumulation.
-		prpC = prpCyc(lyrTckRel(lVar, lNum + 1, enr), lVar.rspPrf[lNum + 1](enr), wvc)
+
+	 error("Unrecognized fill mode.")	
 	end
-	# Update field transfer coefficients. 
-	copyto!(xfrArr, [geoSrs(xfrArr[1] * prpC * xfrItfA[1], xfrItfB[2] * prpC * xfrArr[2] * prpC), geoSrs(xfrItfA[2] + xfrArr[2] * prpC^2, xfrItfB[2] * prpC * xfrArr[2] * prpC), geoSrs(xfrArr[3] * prpC * xfrItfA[3], xfrItfB[4] * prpC * xfrArr[4] * prpC), geoSrs(xfrItfA[4] + xfrArr[4] * prpC^2, xfrItfB[4] * prpC * xfrArr[4] * prpC)])
+
+	return nothing 
+end
+"""
+	
+	xfrFlmExp!(lVar::lyrDsc, enr::Float64, wvc::Float64, lNum::Int, mode::Int, refArrL::SubArray{ComplexF64,2}, refArrR::SubArray{ComplexF64,2}, xfrArr::SubArray{ComplexF64,1})::Nothing
+
+Updates transfer coefficients under expansion of nested reflection coefficient. 
+See associated notes for additional details. 
+"""
+# If mode == 1, the increment is ``added on the right'', 
+# i.e. building from the left. 
+# If mode == 2, the increment is ``added on the left'', i.e. 
+# building from the right.
+# xfrArr holds the expanded and nested coefficients of the 
+# numerator as the first entries of a given column. 
+# The next two entries are the expanded and nested 
+# coefficients of the denominator. 
+# See notes for additional details. 
+function xfrFlmInc!(lVar::lyrDsc, enr::Float64, wvc::Float64, lNum::Int, mode::Int, refArrL::SubArray{ComplexF64,2}, refArrR::SubArray{ComplexF64,2}, xfrArr::SubArray{ComplexF64,1})::Nothing
+
+	if mode == 1
+	
+		copyto!(xfrArr, [xfrArr[1] + refArrR[lNum - 1] * xfrArr[2], prpLyr(2.0 * lyrTckRel(lVar, lNum - 1, enr), lVar.rspPrf[lNum - 1](enr), wvc) * (xfrArr[2] - refArrL[lNum - 1] * xfrArr[1]), xfrArr[3] + refArrR[lNum - 1] * xfrArr[4], prpLyr(2.0 * lyrTckRel(lVar, lNum - 1, enr), lVar.rspPrf[lNum - 1](enr), wvc) * (xfrArr[4] - refArrL[lNum - 1] * xfrArr[3])])
+
+	elseif mode == 2
+		
+		copyto!(xfrArr, [xfrArr[1] + refArrL[lNum] * xfrArr[2], prpLyr(2.0 * lyrTckRel(lVar, lNum - 1, enr), lVar.rspPrf[lNum - 1](enr), wvc) * (xfrArr[2] - refArrR[lNum] * xfrArr[1]), xfrArr[3] + refArrL[lNum] * xfrArr[4], prpLyr(2.0 * lyrTckRel(lVar, lNum - 1, enr), lVar.rspPrf[lNum - 1](enr), wvc) * (xfrArr[4] - refArrR[lNum] * xfrArr[3])])
+	else 
+
+		error("Unrecognized increment mode.")	
+	end
+
+	return nothing
+end
+"""
+	
+	xfrFlmNst!(lVar::lyrDsc, enr::Float64, wvc::Float64, lNum::Int, mode::Int, refArrL::SubArray{ComplexF64,2}, refArrR::SubArray{ComplexF64,2}, xfrArr::SubArray{ComplexF64,1})::Nothing
+
+Updates transfer coefficients by nesting current values, i.e. inclusion of an additional layer. 
+See associated notes for additional details. 
+"""
+# If mode == 1, the increment is ``added on the right'', 
+# i.e. building from the left. 
+# If mode == 2, the increment is ``added on the left'', i.e. 
+# building from the right.
+# xfrArr holds the expanded and nested coefficients of the 
+# numerator as the first entries of a given column. 
+# The next two entries are the expanded and nested 
+# coefficients of the denominator. 
+# See notes for additional details. 
+function xfrFlmInc!(lVar::lyrDsc, enr::Float64, wvc::Float64, lNum::Int, mode::Int, refArrL::SubArray{ComplexF64,2}, refArrR::SubArray{ComplexF64,2}, xfrArr::SubArray{ComplexF64,1})::Nothing
+
+	if mode == 1
+	
+		copyto!(xfrArr, [xfrArr[1] + refArrR[lNum - 1] * xfrArr[2], prpLyr(2.0 * lyrTckRel(lVar, lNum - 1, enr), lVar.rspPrf[lNum - 1](enr), wvc) * (xfrArr[2] - refArrL[lNum - 1] * xfrArr[1]), xfrArr[3] + refArrR[lNum - 1] * xfrArr[4], prpLyr(2.0 * lyrTckRel(lVar, lNum - 1, enr), lVar.rspPrf[lNum - 1](enr), wvc) * (xfrArr[4] - refArrL[lNum - 1] * xfrArr[3])])
+
+	elseif mode == 2
+		
+		copyto!(xfrArr, [xfrArr[1] + refArrL[lNum] * xfrArr[2], prpLyr(2.0 * lyrTckRel(lVar, lNum - 1, enr), lVar.rspPrf[lNum - 1](enr), wvc) * (xfrArr[2] - refArrR[lNum] * xfrArr[1]), xfrArr[3] + refArrL[lNum] * xfrArr[4], prpLyr(2.0 * lyrTckRel(lVar, lNum - 1, enr), lVar.rspPrf[lNum - 1](enr), wvc) * (xfrArr[4] - refArrR[lNum] * xfrArr[3])])
+	else 
+
+		error("Unrecognized increment mode.")	
+	end
 
 	return nothing
 end
@@ -236,7 +304,8 @@ end
 
 	relFlm(lVar::lyrDsc, enr::Float64, wvc::Float64, lPair::Tuple{Int64,Int64}, trfCff::Array{ComplexF64,1})::Array{ComplexF64,1}
 
-Relative field amplitude coefficients from transfer coefficients. 
+Relative field amplitude coefficients from transfer 
+coefficients. 
 See tfrFlm for structure for transfer coefficient array. 
 """
 function relFlm(lVar::lyrDsc, enr::Float64, wvc::Float64, lPair::Tuple{Int64,Int64}, trfCff::Array{ComplexF64,1})::Array{ComplexF64,1}
@@ -244,7 +313,7 @@ function relFlm(lVar::lyrDsc, enr::Float64, wvc::Float64, lPair::Tuple{Int64,Int
 	# Layer phase propagation 
 	if lPair[1] > 1
 
-		lLyrPhz = prpCyc(lyrTckRel(lVar, lPair[1], enr), lVar.rspPrf[lPair[1]](enr), wvc)
+		lLyrPhz = prpLyr(lyrTckRel(lVar, lPair[1], enr), lVar.rspPrf[lPair[1]](enr), wvc)
 	else
 
 		lLyrPhz = 0.0
@@ -252,7 +321,7 @@ function relFlm(lVar::lyrDsc, enr::Float64, wvc::Float64, lPair::Tuple{Int64,Int
 
 	if lPair[2] < length(lVar.tmpLst)
 
-		rLyrPhz = prpCyc(lyrTckRel(lVar, lPair[2], enr), lVar.rspPrf[lPair[2]](enr), wvc)
+		rLyrPhz = prpLyr(lyrTckRel(lVar, lPair[2], enr), lVar.rspPrf[lPair[2]](enr), wvc)
 	else
 
 		rLyrPhz = 0.0
@@ -266,48 +335,58 @@ function relFlm(lVar::lyrDsc, enr::Float64, wvc::Float64, lPair::Tuple{Int64,Int
 end
 """
 	
-	tfrFlm(lVar::lyrDsc, enr::Float64, wvc::Float64, lPair::Tuple{Int64,Int64})::Array{ComplexF64,1}
+	tfrFlm!(lVar::lyrDsc, enr::Float64, wvc::Float64, lPairs::Array{Int64,2}, bdrArrL::Array{ComplexF64,2}, bdrArrR::Array{ComplexF64,2}, trfCff::Array{ComplexF64,2})::Nothing
 
-Calculates field transfer coefficients between an ordered pair of layers. 
+Calculates field transfer coefficients for a list of ordered 
+pairs of layers. 
 """
-function tfrFlm(lVar::lyrDsc, enr::Float64, wvc::Float64, lPair::Tuple{Int64,Int64})::Array{ComplexF64,1}
+# bdrArrL should contain interface transfer coefficients with 
+# smaller layer numbers treated as initial. 
+# bdrArrR should contain interface transfer coefficients with 
+# larger layer numbers treated as initial. 
+# trfCff[:, lyr] = [trnCf; refLL; refLR; refRL; refRR]
+# p pol followed by s pol
+function tfrFlm!(lVar::lyrDsc, enr::Float64, wvc::Float64, lPairs::Array{Int64,2}, bdrArrL::Array{ComplexF64,2}, bdrArrR::Array{ComplexF64,2}, trfCff::Array{ComplexF64,2})::Nothing
 
-	# Flip to inverted structure if needed. 
-	if lPair[2] < lPair[1]
+	# Double check that pairs in list are correctly ordered. 
+	for ind = 1:size(lPairs)[2]
 
-		lVarL = lyrDsc(reverse(-1.0 .* lVar.bdrLoc), reverse(lVar.tmpLst), reverse(lVar.rspPrf))
-		lLyr = lPair[2]
-		rLyr = lPair[1]
-
-	elseif lPair[2] > lPair[1]
-
-		lVarL = lVar
-		lLyr = lPair[1]
-		rLyr = lPair[2]
-	else
-
-		error("Transfer can only exist between distinct layers.")
+		if lPairs[ind, 2] <= lPair[ind, 1]
+			
+			error("Program convention requires ordered layers.")
 		return nothing
 	end
 
+	srcLyr = sort!(unique(lPairs[1,:]))
+	trgLyr = sort!(unique(lPairs[2,:]))
 	# Number of layers
 	lyrN = length(lVarL.tmpLst)
 
 	# Preallocate
-	# Left layer reflection coefficients.
-	refLL = fill(0.0 + 0.0im, 2)
-	refLR = fill(0.0 + 0.0im, 2)
-	# Right layer reflection coefficients.
-	refRL = fill(0.0 + 0.0im, 2)
-	refRR = fill(0.0 + 0.0im, 2)
-	# Layer to layer transmission coefficient.
-	trnCf = fill(0.0 + 0.0im, 2)
-	### Calculate layer reflection and transmission coefficients
-	## Left reflection coefficients 
-	# Left boundary seed.
-	ind = 2
-	xfrRef = xfrBdr(wvc, (wvcPrp(lVarL.rspPrf[2](enr), lyrTckRel(lVar, 2, enr), wvc), wvcPrp(lVarL.rspPrf[1](enr), lyrTckRel(lVar, 1, enr), wvc)), (lVarL.rspPrf[2](enr), lVarL.rspPrf[1](enr)))
+	# Coefficient for calculating reflection. 
+	# Asymmetry comes from assumption of ordered layers. 
+	xfrCffLP = fill(0.0 + 0.0im, 4, length(trgLyr))
+	xfrCffLS = fill(0.0 + 0.0im, 4, length(trgLyr))
+	xfrCffRP = fill(0.0 + 0.0im, 4)
+	xfrCffRS = fill(0.0 + 0.0im, 4)
+	
 
+	### Calculate layer reflection and transmission coefficients
+	## Right incident reflection coefficients. 
+	# Treat possibility that source layer is first layer.
+	if srcLyr[1] == 1
+
+		for lyr in findall(x -> x == 1, lPairs[1,:])
+
+			trfCff[3:4,lyr] .= [bdrArrR[2,1], bdrArrR[4,1]]
+		end
+	end 
+
+	# Left boundary seed.
+	xfrCffLP 
+
+	ind = 2
+	
 	while ind < rLyr 
 
 		if lLyr == ind
@@ -614,4 +693,4 @@ function femFlx(lVar::lyrDsc, lPair::Tuple{Int64,Int64}, enr::Float64, mode::Int
 
 	return flxPfc(lVar, lPair, enr) * intVal
 end
-end
+# end
