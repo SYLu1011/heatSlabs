@@ -472,7 +472,6 @@ function tfrFlm!(lVar::lyrDsc, lPairs::Array{Int64,2}, enr::Float64, wvc::Float6
 					imdCff[1, lyrPInd] = /(trnTmpP[1] * trnLP[srcLyr], trnTmpP[2] + trnTmpP[3] * refLP[trgLyr - 1])
 					# S-polarized
 					imdCff[2, lyrPInd] = /(trnTmpS[1] * trnLS[srcLyr], xfrCffTmpS[2] + trnTmpS[3] * refLS[trgLyr - 1])
-					
 				end
 				# Move to next target layer. 
 				if length(trgLyrs) > trgUInd
