@@ -1,11 +1,11 @@
 # module FilmUtilities
-using Cubature
+using Base.Threads, Cubature
 export lyrDsc, femFlx, plnFnc, flxPfc, flxFncPR
 ## Constants
 # Order parameter for cubature.
 const qudOrd = 32
 # Relative tolerance for cubature.
-const relTol = 1.0e-3
+const cubTol = 1.0e-3
 # Cutoff for unbounded integrals tan and atan variable transforms.
 # tan(pi/2 - intDltInf) scaling. 
 # Use number smaller than 0.5 * ^(10.0, -4) for sub nanometer gaps. 
@@ -38,62 +38,11 @@ include("filmDataStructures.jl")
 # See notes for theoretical details.
 """
 
-	fndMax(f::Any, lb::Float64, ub::Float64, wdt::Float64, prc::Float64)::Float64
-
-# Naively locate the maximum of a function within a specified interval.
-"""
-function fndMax(f::Any, lb::Float64, ub::Float64, wdt::Float64, prc::Float64)::Tuple{Float64, Float64}
-
-	lWdt = wdt
-	r = lb : wdt : ub
-	(val, ind) = findmax(f.(r))
-
-	while lWdt > prc
-		
-		lWdt *= 0.1
-		
-		if ind > 1 && ind < length(r)
-
-			r = r[ind - 1] : lWdt : r[ind + 1]
-		elseif ind == 1
-
-			r = r[1] : lWdt : r[2]
-		else
-
-			r = r[end - 1] : lWdt : r[end]
-		end
-
-		(val, ind) = findmax(f.(r))
-	end
-
-	return (val, r[ind])
-end
-"""
-
-	fndWdt(f::Any, sLoc::Float64, sVal::Float64, initWdt::Float64, relV::Float64)::Float64
-
-# Naively determine width of nearly singular behavior.
-"""
-function fndWdt(f::Any, sLoc::Float64, sVal::Float64, initWdt::Float64, relV::Float64)::Float64
-
-	lrelV = 1.0
-	lWdt = 2.0 * initWdt
-
-	while lrelV < relV
-		
-		lWdt *= 0.5	
-		lrelV = /(f(sLoc + lWdt), sVal)
-	end
-
-	return lWdt
-end
-"""
-
 	geoSrs(intTrm::ComplexF64, geoFct::ComplexF64)::ComplexF64
 
 Analytic extension of the geometric series for a given initial term and geometric factor.
 """
-function geoSrs(intTrm::ComplexF64, geoFct::ComplexF64)::ComplexF64
+@inline function geoSrs(intTrm::ComplexF64, geoFct::ComplexF64)::ComplexF64
 
 	return /(intTrm, 1.0 - geoFct)
 end
@@ -103,7 +52,7 @@ end
 
 Square root defined with cut line along real axis. 
 """
-function zSqrt(val::ComplexF64)::ComplexF64
+@inline function zSqrt(val::ComplexF64)::ComplexF64
 
 	if angle(val) >= 0.0
 
@@ -119,7 +68,7 @@ end
 
 Perpendicular wave, incorporating effective normalization.
 """
-function wvcPrp(rsp::ComplexF64, lTck::Float64, wvc::Float64)::ComplexF64
+@inline function wvcPrp(rsp::ComplexF64, lTck::Float64, wvc::Float64)::ComplexF64
 
 	return zSqrt(rsp - wvc^2) + im * lcReg * ^(/(sqrt(abs(zSqrt(rsp - wvc^2))^2 + wvc^2) * lTck, mxSz), 4)
 end
@@ -129,19 +78,18 @@ end
 
 Planck function for energy in electron volts and temperature in Kelvin.
 """
-function plcFnc(enr::Float64, tmp::Float64)::Float64
+@inline function plcFnc(enr::Float64, tmp::Float64)::Float64
 
 	return /(enr, exp(/(enr, blzK * tmp)) - 1.0)
 end
 """
-	flxPfc(lVar::lyrDsc, lPair::Tuple{Int64,Int64}, enr::Float64)::Float
+	flxPfc(lVar::lyrDsc, lPair::Array{Int64,1}, enr::Float64)::Float
 
-Energy prefactor in Watts per electron volts cm^-2 for fluctuating electric field intensity 
-integrand. 
+Energy prefactor, W eV^-1 cm^-2, for fluctuating electric field intensity integrand. 
 """
-function flxPfc(lVar::lyrDsc, lPair::Tuple{Int64,Int64}, enr::Float64)::Float64
+@inline function flxPfc(lVar::lyrDsc, lPair::Array{Int64,1}, enr::Float64)::Float64
 
-	return /(evJ * enr^2 * pi^3, 2.0^2 * muEv^2 * hBEv * ^(10.0, -8)) * (plcFnc(enr, lVar.tmpLst[lPair[1]]) - plcFnc(enr, lVar.tmpLst[lPair[2]]))
+	return imag(lVar.rspPrf[lPair[1]](enr)) * imag(lVar.rspPrf[lPair[2]](enr)) * /(evJ * enr^2 * pi^3, 2.0^2 * muEv^2 * hBEv * ^(10.0, -8)) * (plcFnc(enr, lVar.tmpLst[lPair[1]]) - plcFnc(enr, lVar.tmpLst[lPair[2]]))
 end
 """
 
@@ -149,7 +97,7 @@ end
 
 Calculation of phase accumulation under propagation, distance assumed to be in units of wavelength.
 """
-function prpLyr(dst::Float64, rsp::ComplexF64, wvc::Float64)::ComplexF64
+@inline function prpLyr(dst::Float64, rsp::ComplexF64, wvc::Float64)::ComplexF64
 
 	return exp(2.0 * pi * im * wvcPrp(rsp, dst, wvc) * dst)
 end
@@ -158,7 +106,7 @@ end
 
 Layer thickness in microns. 
 """
-function lyrTck(lVar::lyrDsc, lNum::Int)::Float64
+@inline function lyrTck(lVar::lyrDsc, lNum::Int)::Float64
 
 	if lNum == 1 || lNum == length(lVar.tmpLst)
 
@@ -174,7 +122,7 @@ end
 
 Compute layer thickness in units of relative wavelength.
 """
-function lyrTckRel(lVar::lyrDsc, lNum::Int, enr::Float64)::Float64
+@inline function lyrTckRel(lVar::lyrDsc, lNum::Int, enr::Float64)::Float64
 
 	return /(enr * lyrTck(lVar, lNum), muEv)
 end
@@ -184,48 +132,45 @@ end
 
 Compute total structure thickness in units of relative wavelength.
 """
-function strTck(lVar::lyrDsc, enr::Float64)::Float64
+@inline function strTck(lVar::lyrDsc, enr::Float64)::Float64
 
 	return /(enr * (lVar.bdrLoc[end] - lVar.bdrLoc[1]), muEv)
 end
 """
 
-	xfrBdr(kPrp::NTuple{2,ComplexF64}, rsp::NTuple{2,ComplexF64})::Array{ComplexF64,1}
+	xfrBdr(wvc::Float64, kPrp::NTuple{2,ComplexF64}, rsp::NTuple{2,ComplexF64})::Array{ComplexF64,1}
 
-Isotopic electric reflection and transmission coefficients for 
-a interface between two half spaces. 
-First entry in the rsp permittivity tuple is consider to be 
-incident. 
-The first two returned entries are for 'p' polarized waves, 
-the next two for 's' polarized waves. 
+Isotopic electric reflection and transmission coefficients for two half spaces. 
+First entries in the permittivity (rps) and wave vector (kPrp) tuples are consider to be incident. 
+The first two entries returned are for 'p' polarized waves, the next two for 's' polarized waves. 
 Odd numbers are transmission, even modes are reflection.
 """
-function xfrBdr(wvc::Float64, kPrp::NTuple{2,ComplexF64}, rsp::NTuple{2,ComplexF64})::Array{ComplexF64,1}
-
+@inline function xfrBdr(wvc::Float64, kPrp::NTuple{2,ComplexF64}, rsp::NTuple{2,ComplexF64})::Array{ComplexF64,1}
 	# Fresnel coefficients.
 	return [/(2.0 * zSqrt(rsp[1] * rsp[2]) * kPrp[1], rsp[1] * kPrp[2] + rsp[2] * kPrp[1]), /(rsp[1] * kPrp[2] - rsp[2] * kPrp[1], rsp[1] * kPrp[2] + rsp[2] * kPrp[1]), /(2.0 * kPrp[1], kPrp[2] + kPrp[1]), /(kPrp[2] - kPrp[1], kPrp[2] + kPrp[1])]
 end
 """
 
-	bdrFill!(lVar::lyrDsc, enr::Float64, wvc::Float64, mode::Int, bdrArr::Array{ComplexF64,2})::Nothing
+	bdrFill!(lVar::lyrDsc, enr::Float64, wvc::Float64, mode::Int, bdrArr::SubArray{ComplexF64,2})::Nothing
 
-Fills bdrArr all individual boundary transfer coefficients, 
-i.e. as though every boundary were between half-spaces. 
+Fills bdrArr with individual boundary transfer coefficients, i.e. as though every boundary were 
+between half-spaces. 
 """
 # If mode == 1 smaller indices are treated as initial. 
 # If mode == 2 larger indices are treated as initial.
-# Convention for bdrArr as described for xfrBdr. 
-function bdrFill!(lVar::lyrDsc, enr::Float64, wvc::Float64, mode::Int, bdrArr::Array{ComplexF64,2})::Nothing
-
+# Convention for a given column of bdrArr as described for xfrBdr. 
+@inline function bdrFill!(lVar::lyrDsc, enr::Float64, wvc::Float64, mode::Int, bdrArr::SubArray{ComplexF64,2})::Nothing
+	# Smaller indices are treated as initial. 
 	if mode == 1
 
-		for bdr = 1:length(lVar.bdrLoc)
+		for bdr = 1 : length(lVar.bdrLoc)
 
 			bdrArr[:,bdr] .= xfrBdr(wvc, (wvcPrp(lVar.rspPrf[bdr](enr), lyrTckRel(lVar, bdr, enr), wvc), wvcPrp(lVar.rspPrf[bdr + 1](enr), lyrTckRel(lVar, bdr + 1, enr), wvc)), (lVar.rspPrf[bdr](enr), lVar.rspPrf[bdr + 1](enr)))
 		end
+	# Larger indices are treated as initial. 
 	elseif mode == 2
 
-		for bdr = 1:length(lVar.bdrLoc)
+		for bdr = 1 : length(lVar.bdrLoc)
 			
 			bdrArr[:,bdr] .= xfrBdr(wvc, (wvcPrp(lVar.rspPrf[bdr + 1](enr), lyrTckRel(lVar, bdr + 1, enr), wvc), wvcPrp(lVar.rspPrf[bdr](enr), lyrTckRel(lVar, bdr, enr), wvc)), (lVar.rspPrf[bdr + 1](enr), lVar.rspPrf[bdr](enr)))
 		end
@@ -238,29 +183,24 @@ function bdrFill!(lVar::lyrDsc, enr::Float64, wvc::Float64, mode::Int, bdrArr::A
 end
 """
 	
-	xfrFlmExp!(lVar::lyrDsc, enr::Float64, wvc::Float64, lNum::Int, mode::Int, refArrL::SubArray{ComplexF64,2}, refArrR::SubArray{ComplexF64,2}, xfrArr::SubArray{ComplexF64,1})::Nothing
+	trnFlmExp!(lVar::lyrDsc, enr::Float64, wvc::Float64, lNum::Int, mode::Int, trnArrHL::SubArray{ComplexF64,1}, trnArrHR::SubArray{ComplexF64,1}, refArrHL::SubArray{ComplexF64,1}, refArrHR::SubArray{ComplexF64,1}, trnArr::Array{ComplexF64,1})::Nothing
 
-Updates transfer coefficients under expansion of nested reflection coefficient. 
+Updates transmission coefficients under expansion of nested reflection coefficient. 
 See associated notes for additional details. 
 """
-# If mode == 1, the increment is ``added on the right'', 
-# i.e. building from the left. 
-# If mode == 2, the increment is ``added on the left'', i.e. 
-# building from the right.
-# xfrArr holds the expanded and nested coefficients of the 
-# numerator as the first entries of a given column. 
-# The next two entries are the expanded and nested 
-# coefficients of the denominator. 
+# If mode == 1, expansion is ``to the right'', i.e. expanding to growing layers numbers. 
+# If mode == 2, expansion is ``to the left'', i.e. expanding to shrinking layers numbers.
+# First entry of trnArr should be numerator coefficient. 
+# The next two entries are the reflection and additional coefficients for the denominator. 
 # See notes for additional details. 
-function xfrFlmInc!(lVar::lyrDsc, enr::Float64, wvc::Float64, lNum::Int, mode::Int, refArrL::SubArray{ComplexF64,2}, refArrR::SubArray{ComplexF64,2}, xfrArr::SubArray{ComplexF64,1})::Nothing
+@inline function trnFlmExp!(lVar::lyrDsc, enr::Float64, wvc::Float64, lNum::Int, mode::Int, trnArrHL::SubArray{ComplexF64,1}, trnArrHR::SubArray{ComplexF64,1}, refArrHL::SubArray{ComplexF64,1}, refArrHR::SubArray{ComplexF64,1}, trnArr::Array{ComplexF64,1})::Nothing
 
 	if mode == 1
 	
-		copyto!(xfrArr, [xfrArr[1] + refArrR[lNum - 1] * xfrArr[2], prpLyr(2.0 * lyrTckRel(lVar, lNum - 1, enr), lVar.rspPrf[lNum - 1](enr), wvc) * (xfrArr[2] - refArrL[lNum - 1] * xfrArr[1]), xfrArr[3] + refArrR[lNum - 1] * xfrArr[4], prpLyr(2.0 * lyrTckRel(lVar, lNum - 1, enr), lVar.rspPrf[lNum - 1](enr), wvc) * (xfrArr[4] - refArrL[lNum - 1] * xfrArr[3])])
-
+		copyto!(trnArr, [trnArrHL[lNum] * prpLyr(2.0 * lyrTckRel(lVar, lNum, enr), lVar.rspPrf[lNum](enr), wvc) * trnArr[1], trnArr[2] + refArrHL[lNum - 1] * trnArr[3], prpLyr(2.0 * lyrTckRel(lVar, lNum, enr), lVar.rspPrf[lNum](enr), wvc) * (trnArr[3] - refArrHR[lNum - 1] * trnArr[2])])
 	elseif mode == 2
 		
-		copyto!(xfrArr, [xfrArr[1] + refArrL[lNum] * xfrArr[2], prpLyr(2.0 * lyrTckRel(lVar, lNum - 1, enr), lVar.rspPrf[lNum - 1](enr), wvc) * (xfrArr[2] - refArrR[lNum] * xfrArr[1]), xfrArr[3] + refArrL[lNum] * xfrArr[4], prpLyr(2.0 * lyrTckRel(lVar, lNum - 1, enr), lVar.rspPrf[lNum - 1](enr), wvc) * (xfrArr[4] - refArrR[lNum] * xfrArr[3])])
+		copyto!(trnArr, [trnArrHR[lNum - 1] * prpLyr(2.0 * lyrTckRel(lVar, lNum, enr), lVar.rspPrf[lNum](enr), wvc) * trnArr[1], trnArr[2] + refArrHR[lNum] * trnArr[3], prpLyr(2.0 * lyrTckRel(lVar, lNum, enr), lVar.rspPrf[lNum ](enr), wvc) * (trnArr[3] - refArrHL[lNum] * trnArr[2])])
 	else 
 
 		error("Unrecognized increment mode.")	
@@ -270,29 +210,25 @@ function xfrFlmInc!(lVar::lyrDsc, enr::Float64, wvc::Float64, lNum::Int, mode::I
 end
 """
 	
-	xfrFlmNst!(lVar::lyrDsc, enr::Float64, wvc::Float64, lNum::Int, mode::Int, refArrL::SubArray{ComplexF64,2}, refArrR::SubArray{ComplexF64,2}, xfrArr::SubArray{ComplexF64,1})::Nothing
+	xfrFlmNst!(lVar::lyrDsc, enr::Float64, wvc::Float64, lNum::Int, mode::Int, refArrL::SubArray{ComplexF64,1}, refArrR::SubArray{ComplexF64,1}, xfrArr::Array{ComplexF64,1})::Nothing
 
 Updates transfer coefficients by nesting current values, i.e. inclusion of an additional layer. 
 See associated notes for additional details. 
 """
-# If mode == 1, the increment is ``added on the right'', 
-# i.e. building from the left. 
-# If mode == 2, the increment is ``added on the left'', i.e. 
-# building from the right.
-# xfrArr holds the expanded and nested coefficients of the 
-# numerator as the first entries of a given column. 
-# The next two entries are the expanded and nested 
-# coefficients of the denominator. 
+# If mode == 1, nesting is ``to the right'', i.e. adding growing layer numbers. 
+# If mode == 2, nesting is ``to the left'', i.e. adding shrinking layer numbers.
+# xfrArr should hold the expansion coefficients, to the current level, of the numerator as the 
+# its first two entries, additional term followed by reflection term. 
+# The next two entries follow the same convention, but for the denominator. 
 # See notes for additional details. 
-function xfrFlmInc!(lVar::lyrDsc, enr::Float64, wvc::Float64, lNum::Int, mode::Int, refArrL::SubArray{ComplexF64,2}, refArrR::SubArray{ComplexF64,2}, xfrArr::SubArray{ComplexF64,1})::Nothing
+@inline function xfrFlmNst!(lVar::lyrDsc, enr::Float64, wvc::Float64, lNum::Int, mode::Int, refArrHL::SubArray{ComplexF64,1}, refArrHR::SubArray{ComplexF64,1}, xfrArr::Array{ComplexF64,1})::Nothing
 
 	if mode == 1
 	
-		copyto!(xfrArr, [xfrArr[1] + refArrR[lNum - 1] * xfrArr[2], prpLyr(2.0 * lyrTckRel(lVar, lNum - 1, enr), lVar.rspPrf[lNum - 1](enr), wvc) * (xfrArr[2] - refArrL[lNum - 1] * xfrArr[1]), xfrArr[3] + refArrR[lNum - 1] * xfrArr[4], prpLyr(2.0 * lyrTckRel(lVar, lNum - 1, enr), lVar.rspPrf[lNum - 1](enr), wvc) * (xfrArr[4] - refArrL[lNum - 1] * xfrArr[3])])
-
+		copyto!(xfrArr, [refArrHR[lNum] * xfrArr[3] + prpLyr(2.0 * lyrTckRel(lVar, lNum, enr), lVar.rspPrf[lNum](enr), wvc) * xfrArr[1], refArrHR[lNum] * xfrArr[4] + prpLyr(2.0 * lyrTckRel(lVar, lNum, enr), lVar.rspPrf[lNum](enr), wvc) * xfrArr[2], xfrArr[3] - prpLyr(2.0 * lyrTckRel(lVar, lNum, enr), lVar.rspPrf[lNum](enr), wvc) * refArrHL[lNum] * xfrArr[1], xfrArr[4] - prpLyr(2.0 * lyrTckRel(lVar, lNum, enr), lVar.rspPrf[lNum](enr), wvc) * refArrHL[lNum] * xfrArr[2]])
 	elseif mode == 2
 		
-		copyto!(xfrArr, [xfrArr[1] + refArrL[lNum] * xfrArr[2], prpLyr(2.0 * lyrTckRel(lVar, lNum - 1, enr), lVar.rspPrf[lNum - 1](enr), wvc) * (xfrArr[2] - refArrR[lNum] * xfrArr[1]), xfrArr[3] + refArrL[lNum] * xfrArr[4], prpLyr(2.0 * lyrTckRel(lVar, lNum - 1, enr), lVar.rspPrf[lNum - 1](enr), wvc) * (xfrArr[4] - refArrR[lNum] * xfrArr[3])])
+		copyto!(xfrArr, [refArrHL[lNum - 1] * xfrArr[3] + prpLyr(2.0 * lyrTckRel(lVar, lNum, enr), lVar.rspPrf[lNum](enr), wvc) * xfrArr[1], refArrHL[lNum - 1] * xfrArr[4] + prpLyr(2.0 * lyrTckRel(lVar, lNum, enr), lVar.rspPrf[lNum](enr), wvc) * xfrArr[2], xfrArr[3] - prpLyr(2.0 * lyrTckRel(lVar, lNum, enr), lVar.rspPrf[lNum](enr), wvc) * refArrHR[lNum - 1] * xfrArr[1], xfrArr[4] - prpLyr(2.0 * lyrTckRel(lVar, lNum, enr), lVar.rspPrf[lNum](enr), wvc) * refArrHR[lNum - 1] * xfrArr[2]])
 	else 
 
 		error("Unrecognized increment mode.")	
@@ -302,14 +238,13 @@ function xfrFlmInc!(lVar::lyrDsc, enr::Float64, wvc::Float64, lNum::Int, mode::I
 end
 """
 
-	relFlm(lVar::lyrDsc, enr::Float64, wvc::Float64, lPair::Tuple{Int64,Int64}, trfCff::Array{ComplexF64,1})::Array{ComplexF64,1}
+	relFlm(lVar::lyrDsc, enr::Float64, wvc::Float64, lPair::SubArray{Int64,1}, imdCff::SubArray{ComplexF64,1})::Array{ComplexF64,1}
 
-Relative field amplitude coefficients from transfer 
-coefficients. 
-See tfrFlm for structure for transfer coefficient array. 
+Relative field amplitude coefficients from transfer coefficients. 
 """
-function relFlm(lVar::lyrDsc, enr::Float64, wvc::Float64, lPair::Tuple{Int64,Int64}, trfCff::Array{ComplexF64,1})::Array{ComplexF64,1}
-	
+# imdCff[:, lyr] = [trnCf; refLeftCellLeft; refLeftCellRight; refRightCellLeft; 
+# refRightCellRight], with p-pol followed by s-pol in each. 
+function relFlm(lVar::lyrDsc, enr::Float64, wvc::Float64, lPair::SubArray{Int64,1}, imdCff::SubArray{ComplexF64,1})::Array{ComplexF64,1}
 	# Layer phase propagation 
 	if lPair[1] > 1
 
@@ -327,172 +262,322 @@ function relFlm(lVar::lyrDsc, enr::Float64, wvc::Float64, lPair::Tuple{Int64,Int
 		rLyrPhz = 0.0
 	end
 	# Field dressing, absolute value used for stability, consistent with later expressions
-	pDrs = abs(geoSrs(1.0 + im * 0.0, trfCff[3] * lLyrPhz * trfCff[5] * lLyrPhz)) * abs(geoSrs(1.0 + im * 0.0, trfCff[7] * rLyrPhz * trfCff[9] * rLyrPhz))
-	sDrs = abs(geoSrs(1.0 + im * 0.0, trfCff[4] * lLyrPhz * trfCff[6] * lLyrPhz)) * abs(geoSrs(1.0 + im * 0.0, trfCff[8] * rLyrPhz * trfCff[10] * rLyrPhz))
+	pDrs = abs(geoSrs(1.0 + im * 0.0, imdCff[3] * lLyrPhz * imdCff[5] * lLyrPhz)) * abs(geoSrs(1.0 + im * 0.0, imdCff[7] * rLyrPhz * imdCff[9] * rLyrPhz))
+	sDrs = abs(geoSrs(1.0 + im * 0.0, imdCff[4] * lLyrPhz * imdCff[6] * lLyrPhz)) * abs(geoSrs(1.0 + im * 0.0, imdCff[8] * rLyrPhz * imdCff[10] * rLyrPhz))
 	# Propagation term that should be included in left moving waves is shifted to the 
 	# flux integrand to avoid overflow. 
-	return [pDrs * trfCff[1], trfCff[9] * trfCff[1], sDrs * trfCff[2], sDrs * trfCff[10] * trfCff[2]]
+	return [pDrs * imdCff[1], imdCff[9] * imdCff[1], sDrs * imdCff[2], sDrs * imdCff[10] * imdCff[2]]
 end
 """
 	
-	tfrFlm!(lVar::lyrDsc, enr::Float64, wvc::Float64, lPairs::Array{Int64,2}, bdrArrL::Array{ComplexF64,2}, bdrArrR::Array{ComplexF64,2}, trfCff::Array{ComplexF64,2})::Nothing
+	tfrFlm!(lVar::lyrDsc, lPairs::Array{Int64,2}, enr::Float64, wvc::Float64, bdrArrL::SubArray{ComplexF64,2}, bdrArrR::SubArray{ComplexF64,2}, imdCff::SubArray{ComplexF64,2}, xfrCff::SubArray{ComplexF64,2})::Nothing
 
-Calculates field transfer coefficients for a list of ordered 
-pairs of layers. 
+Calculates field transfer coefficients for a list of ordered pairs of layers. 
 """
-# bdrArrL should contain interface transfer coefficients with 
-# smaller layer numbers treated as initial. 
-# bdrArrR should contain interface transfer coefficients with 
-# larger layer numbers treated as initial. 
-# trfCff[:, lyr] = [trnCf; refLL; refLR; refRL; refRR]
-# p pol followed by s pol
-function tfrFlm!(lVar::lyrDsc, enr::Float64, wvc::Float64, lPairs::Array{Int64,2}, bdrArrL::Array{ComplexF64,2}, bdrArrR::Array{ComplexF64,2}, trfCff::Array{ComplexF64,2})::Nothing
-
+# bdrArrL will contain interface transfer coefficients with smaller layer numbers treated as 
+# initial. 
+# bdrArrR will contain interface transfer coefficients with larger layer numbers treated as 
+# initial. 
+function tfrFlm!(lVar::lyrDsc, lPairs::Array{Int64,2}, enr::Float64, wvc::Float64, bdrArrL::SubArray{ComplexF64,2}, bdrArrR::SubArray{ComplexF64,2}, imdCff::SubArray{ComplexF64,2}, xfrCff::SubArray{ComplexF64,2})::Nothing
+	# Calculate infinite interface coefficients.
+	# Left incident.
+	bdrFill!(lVar, enr, wvc, 1, bdrArrL)
+	# Right incident.
+	bdrFill!(lVar, enr, wvc, 2, bdrArrR)
 	# Double check that pairs in list are correctly ordered. 
-	for ind = 1:size(lPairs)[2]
+	for pr = 1:size(lPairs)[2]
 
-		if lPairs[ind, 2] <= lPair[ind, 1]
+		if lPairs[2, pr] <= lPairs[1, pr]
 			
-			error("Program convention requires ordered layers.")
-		return nothing
+			error("Current program convention requires ordered layers.")
+			return nothing
+		end
 	end
-
-	srcLyr = sort!(unique(lPairs[1,:]))
-	trgLyr = sort!(unique(lPairs[2,:]))
-	# Number of layers
-	lyrN = length(lVarL.tmpLst)
-
-	# Preallocate
-	# Coefficient for calculating reflection. 
-	# Asymmetry comes from assumption of ordered layers. 
-	xfrCffLP = fill(0.0 + 0.0im, 4, length(trgLyr))
-	xfrCffLS = fill(0.0 + 0.0im, 4, length(trgLyr))
-	xfrCffRP = fill(0.0 + 0.0im, 4)
-	xfrCffRS = fill(0.0 + 0.0im, 4)
-	
-
-	### Calculate layer reflection and transmission coefficients
+	# Unique, sorted, source and target layer lists.
+	srcLyrs = sort!(unique(lPairs[1,:]))
+	trgLyrs = sort!(unique(lPairs[2,:]))
+	# Running indices for unique source and target layers.
+	srcUInd = 1
+	trgUInd = 1
+	# Number of layers.
+	numLyrs = length(lVar.tmpLst)
+	# Reflection and transmission coefficient views. 
+	@views refLP = bdrArrL[2, :]
+	@views refLS = bdrArrL[4, :]
+	@views refRP = bdrArrR[2, :]
+	@views refRS = bdrArrR[4, :]
+	@views trnLP = bdrArrL[1, :]
+	@views trnLS = bdrArrL[3, :]
+	@views trnRP = bdrArrR[1, :]
+	@views trnRS = bdrArrR[3, :]
+	# Temporary transmission coefficients.
+	trnTmpP = [1.0 + im * 0.0, 1.0 + im * 0.0, 0.0 + im * 0.0]
+	trnTmpS = [1.0 + im * 0.0, 1.0 + im * 0.0, 0.0 + im * 0.0]
+	### Calculate layer reflection and transmission coefficients.
 	## Right incident reflection coefficients. 
-	# Treat possibility that source layer is first layer.
-	if srcLyr[1] == 1
+	# Safeguard against fictitious reflections from infinite boundary.
+	if srcLyrs[1] == 1
 
-		for lyr in findall(x -> x == 1, lPairs[1,:])
+		for lyrPInd in findall(x -> x == 1, lPairs[1, :])
 
-			trfCff[3:4,lyr] .= [bdrArrR[2,1], bdrArrR[4,1]]
+			imdCff[3:4, lyrPInd] .= [0.0 + im * 0.0, 0.0 + im * 0.0]
+		end
+		# Move to next set of source layers. 
+		if length(srcLyrs) > srcUInd
+			
+			srcUInd += 1
 		end
 	end 
-
-	# Left boundary seed.
-	xfrCffLP 
-
+	# Seed nesting construction.
+	# P-polarized.
+	xfrCffTmpP = [0.0 + im * 0.0, 1.0 + im * 0.0, 1.0 + im * 0.0, 0.0 + im * 0.0]
+	# S-polarized.
+	xfrCffTmpS = [0.0 + im * 0.0, 1.0 + im * 0.0, 1.0 + im * 0.0, 0.0 + im * 0.0]
+	# Set index to begin nesting.
 	ind = 2
 	
-	while ind < rLyr 
-
-		if lLyr == ind
-			# Save left reflection coefficients for left cell.
-			refLL .= [xfrRef[2], xfrRef[4]]
-		end	
-		# Increment reflection field coefficients.
+	while ind < trgLyrs[end]
+		# Save right incident reflection coefficients for source cells.
+		if srcLyrs[srcUInd] == ind
+			
+			for lyrPInd in findall(x -> x == ind, lPairs[1, :])
+				# P-polarized
+				imdCff[3, lyrPInd] = /(xfrCffTmpP[1] + xfrCffTmpP[2] * refRP[1], xfrCffTmpP[3] + xfrCffTmpP[4] * refRP[1])
+				# S-polarized
+				imdCff[4, lyrPInd] = /(xfrCffTmpS[1] + xfrCffTmpS[2] * refRS[1], xfrCffTmpS[3] + xfrCffTmpS[4] * refRS[1])
+			end
+			# Move to next set of source layers. 
+			if length(srcLyrs) > srcUInd
+				
+				srcUInd += 1	
+			end
+		end
+		# Save right incident reflection coefficients for target cells.
+		if length(trgLyrs) >= trgUInd && trgLyrs[trgUInd] == ind
+			
+			for lyrPInd in findall(x -> x == ind, lPairs[2, :])
+				# P-polarized
+				imdCff[7, lyrPInd] = /(xfrCffTmpP[1] + xfrCffTmpP[2] * refRP[1], xfrCffTmpP[3] + xfrCffTmpP[4] * refRP[1])
+				# S-polarized
+				imdCff[8, lyrPInd] = /(xfrCffTmpS[1] + xfrCffTmpS[2] * refRS[1], xfrCffTmpS[3] + xfrCffTmpS[4] * refRS[1])
+			end
+			# Move to next set of target layers. 
+			if length(trgLyrs) > trgUInd
+				
+				trgUInd += 1	
+			end
+		end
+		# Increment (nest) reflection field coefficients.
+		# P-polarized.
+		xfrFlmNst!(lVar, enr, wvc, ind, 1, refLP, refRP, xfrCffTmpP)
+		# S-polarized.
+		xfrFlmNst!(lVar, enr, wvc, ind, 1, refLS, refRS, xfrCffTmpS)
 		ind = ind + 1
-		xfrFlmInc!(lVarL, enr, wvc, ind, 1, xfrRef)
 	end
-	# Save reflection coefficient for right cell
-	refRL .= [xfrRef[2], xfrRef[4]]
+	# Save right incident reflection coefficients for largest indexed target cells.
+	for lyrPInd in findall(x -> x == trgLyrs[end], lPairs[2, :])
+		# P-polarized.
+		imdCff[7, lyrPInd] = /(xfrCffTmpP[1] + xfrCffTmpP[2] * refRP[1], xfrCffTmpP[3] + xfrCffTmpP[4] * refRP[1])
+		# S-polarized.
+		imdCff[8, lyrPInd] = /(xfrCffTmpS[1] + xfrCffTmpS[2] * refRS[1], xfrCffTmpS[3] + xfrCffTmpS[4] * refRS[1])
+	end
+	## Left incident reflection coefficients.
+	# Safeguard against fictitious reflections from infinite boundary.
+	if trgLyrs[end] == numLyrs
 
-	## Right coefficients coefficients
-	# Right boundary 
-	ind = lyrN - 1
-	# Reflection seed
-	xfrRef .= xfrBdr(wvc, (wvcPrp(lVarL.rspPrf[lyrN - 1](enr), lyrTckRel(lVar, lyrN - 1, enr), wvc), wvcPrp(lVarL.rspPrf[lyrN](enr), lyrTckRel(lVar, lyrN, enr), wvc)), (lVarL.rspPrf[lyrN - 1](enr), lVarL.rspPrf[lyrN](enr)))
-	# Transmission seed
-	xfrTrn = xfrBdr(wvc, (wvcPrp(lVarL.rspPrf[rLyr - 1](enr), lyrTckRel(lVar, rLyr - 1, enr), wvc), wvcPrp(lVarL.rspPrf[rLyr](enr), lyrTckRel(lVar, rLyr, enr), wvc)), (lVarL.rspPrf[rLyr - 1](enr), lVarL.rspPrf[rLyr](enr)))
+		for lyrPInd in findall(x -> x == numLyrs, lPairs[2, :])
 
-	while ind > lLyr
+			imdCff[9:10, lyrPInd] .= [0.0 + im * 0.0, 0.0 + im * 0.0]
+		end
+		# Move to next set of target layers.
+		if trgUInd > 1
+			
+			trgUInd -= 1
+		end
+	end
+	# Reseed nesting construction. 
+	# P-polarized.
+	xfrCffTmpP .= [0.0 + im * 0.0, 1.0 + im * 0.0, 1.0 + im * 0.0, 0.0 + im * 0.0]
+	# S-polarized.
+	xfrCffTmpS .= [0.0 + im * 0.0, 1.0 + im * 0.0, 1.0 + im * 0.0, 0.0 + im * 0.0]
+	# Set index to begin nesting.
+	ind = numLyrs - 1
 
-		if rLyr == ind 
-			# Save right reflection coefficients for right cell.
-			refRR .= [xfrRef[2], xfrRef[4]]
-		end	
+	while ind > srcLyrs[1]
+		# Save left incident reflection coefficients for source cells.
+		if srcLyrs[srcUInd] == ind
+			
+			for lyrPInd in findall(x -> x == ind, lPairs[1, :])
+				# P-polarized
+				imdCff[5, lyrPInd] = /(xfrCffTmpP[1] + xfrCffTmpP[2] * refLP[end], xfrCffTmpP[3] + xfrCffTmpP[4] * refLP[end])
+				# S-polarized
+				imdCff[6, lyrPInd] = /(xfrCffTmpS[1] + xfrCffTmpS[2] * refLS[end], xfrCffTmpS[3] + xfrCffTmpS[4] * refLS[end])
+			end
+			# Move to next set of source layers. 
+			if srcUInd > 1
+
+				srcUInd -= 1	
+			end
+		end
+		# Save left incident reflection coefficients for target cells.
+		if trgLyrs[trgUInd] == ind
+			
+			for lyrPInd in findall(x -> x == ind, lPairs[2, :])
+				# P-polarized
+				imdCff[9, lyrPInd] = /(xfrCffTmpP[1] + xfrCffTmpP[2] * refLP[end], xfrCffTmpP[3] + xfrCffTmpP[4] * refLP[end])
+				# S-polarized
+				imdCff[10, lyrPInd] = /(xfrCffTmpS[1] + xfrCffTmpS[2] * refLS[end], xfrCffTmpS[3] + xfrCffTmpS[4] * refLS[end])
+			end
+			# Move to next set of target layers. 
+			if trgUInd > 1
+				
+				trgUInd -= 1	
+			end
+		end
 		# Increment reflection field coefficients.
+		# P-polarized
+		xfrFlmNst!(lVar, enr, wvc, ind, 2, refLP, refRP, xfrCffTmpP)
+		# S-polarized
+		xfrFlmNst!(lVar, enr, wvc, ind, 2, refLS, refRS, xfrCffTmpS)
 		ind = ind - 1
-		xfrFlmInc!(lVarL, enr, wvc, ind, 2, xfrRef)
-		# Increment transmission field coefficients. 
-		if ind < rLyr - 1
-			xfrFlmInc!(lVarL, enr, wvc, ind, 2, xfrTrn)
+	end
+	# Save left incident reflection coefficients for smallest indexed source cells.
+	for lyrPInd in findall(x -> x == srcLyrs[1], lPairs[1, :])
+		# P-polarized
+		imdCff[5, lyrPInd] = /(xfrCffTmpP[1] + xfrCffTmpP[2] * refLP[end], xfrCffTmpP[3] + xfrCffTmpP[4] * refLP[end])
+		# S-polarized
+		imdCff[6, lyrPInd] = /(xfrCffTmpS[1] + xfrCffTmpS[2] * refLS[end], xfrCffTmpS[3] + xfrCffTmpS[4] * refLS[end])
+	end
+	## Transmission coefficients between cell pairs.
+	for srcLyr in srcLyrs
+		# Set index for target layer loop. 
+		trgLyr = srcLyr + 1
+		# Seed expansion construction, note only three coefficients are used in expansion versus 
+		# four in nesting.
+		# P-polarized.
+		trnTmpP .= [1.0 + im * 0.0, 1.0 + im * 0.0, 0.0 + im * 0.0]
+		# S-polarized.
+		trnTmpS .= [1.0 + im * 0.0, 1.0 + im * 0.0, 0.0 + im * 0.0]
+		# Reset target index.
+		trgUInd = 1
+		# Determine target layers for particular source 
+		trgLyrs = lPairs[2, findall(x -> x == srcLyr, lPairs[1, :])]
+
+		while trgLyr <= trgLyrs[end]
+
+			if trgLyrs[trgUInd] == trgLyr
+
+				for lyrPInd in findall(x -> x == [srcLyr, trgLyr], [lPairs[(2 * ci - 1):(2 * ci)] for ci = 1:size(lPairs)[2]])
+					# P-polarized
+					imdCff[1, lyrPInd] = /(trnTmpP[1] * trnLP[srcLyr], trnTmpP[2] + trnTmpP[3] * refLP[trgLyr - 1])
+					# S-polarized
+					imdCff[2, lyrPInd] = /(trnTmpS[1] * trnLS[srcLyr], xfrCffTmpS[2] + trnTmpS[3] * refLS[trgLyr - 1])
+					
+				end
+				# Move to next target layer. 
+				if length(trgLyrs) > trgUInd
+					
+					trgUInd += 1
+				end
+			end
+			# Step transmission coefficients
+			if trgLyr < numLyrs
+				# P-polarized
+				trnFlmExp!(lVar, enr, wvc, trgLyr, 1, trnLP, trnRP, refLP, refRP, trnTmpP)
+				# S-polarized
+				trnFlmExp!(lVar, enr, wvc, trgLyr, 1, trnLS, trnRS, refLS, refRS, trnTmpS)
+			end
+			
+			trgLyr += 1
+		end
+	end
+	# Calculate total field transmission coefficients.
+	for lP = 1:size(lPairs)[2]
+	
+		xfrCff[:, lP] .= relFlm(lVar, enr, wvc, view(lPairs, :, lP), view(imdCff, :, lP))
+	end
+
+	return nothing
+end
+"""
+	tfrFunc!(lVar::lyrDsc, lPairs::Array{Int64,2}, enr::Float64, wvc::Float64, xfrCff::SubArray{ComplexF64,2}, scl::Float64, tfrVal::Array{Float64,1})::Nothing
+
+Integrand for heat flux between each layer pair in lPairs, scaled by scl. 
+"""
+function tfrFunc!(lVar::lyrDsc, lPairs::Array{Int64,2}, enr::Float64, wvc::Float64, xfrCff::SubArray{ComplexF64,2}, scl::Float64, tfrVal::Array{Float64,1})::Nothing
+	# Preallocate loop variables. 
+	# Permittivity response values. 
+	sRsp = 0.0 + im * 0.0
+	tRsp = 0.0 + im * 0.0
+	# Perpendicular wave vectors.
+	swv = 0.0 + im * 0.0
+	twv = 0.0 + im * 0.0
+	# Layer thickness factors
+	lTck = 0.0
+	sLyrFac = 0.0 
+	tLyrFacR = 0.0 
+	tLyrFacL = 0.0
+	tLyrFacM = 0.0 + im * 0.0
+	# Polarization factors
+	pFacR = 0.0
+	pFacL = 0.0
+	pFacM = 0.0 + im * 0.0
+
+	for pr = 1:size(lPairs)[2]
+		# Permittivity response. 
+		sRsp = lVar.rspPrf[lPairs[1, pr]](enr)
+		tRsp = lVar.rspPrf[lPairs[2, pr]](enr)
+		# Perpendicular wave vectors.
+		swv = wvcPrp(sRsp, lyrTckRel(lVar, lPairs[1, pr], enr), wvc)
+		twv = wvcPrp(tRsp, lyrTckRel(lVar, lPairs[2, pr], enr), wvc)
+		# Layer thickness factors.
+		# Account for possible finite thickness of source layer.
+		if (lPairs[1, pr] != 1) && (lPairs[1, pr] != length(lVar.tmpLst))
+
+			sLyrFac = (1.0 - exp(-4.0 * pi * imag(swv) * lyrTckRel(lVar, lPairs[1, pr], enr)))		
+		else
+
+			sLyrFac = 1.0
+		end
+		# Account for possible finite thickness of target layer. 
+		# Layer pairs are assumed to be ordered, check made in tfrFlm!.
+		if (lPairs[2, pr] != 1) && (lPairs[2, pr] != length(lVar.tmpLst))
+
+			lTck = lyrTckRel(lVar, lPairs[2, pr], enr)
+			# Single layer factor comes from shifting factors to avoid overflow.
+			tLyrFacR = 1.0 - exp(-4.0 * pi * imag(twv) * lTck)
+			tLyrFacL = exp(-4.0 * pi * imag(twv) * lTck) * (1.0 - exp(-4.0 * pi * imag(twv) * lTck))
+			tLyrFacM = exp(-4.0 * pi * lTck * (im * real(twv) + imag(twv))) * (1.0 - exp(4.0 * pi * im * real(twv) * lTck))
+		else
+			
+			tLyrFacR = 1.0 
+			tLyrFacL = 0.0
+			tLyrFacM = 0.0 + im * 0.0
+		end
+		# Magnitude factor for p-polarized right moving waves.
+		pFacR = /(abs(wvc^2 + conj(swv) * twv)^2, abs(tRsp) * abs(sRsp))
+		# Magnitude factor for p-polarized left moving waves.
+		pFacL = /(abs(wvc^2 - conj(swv) * twv)^2, abs(tRsp) * abs(sRsp))
+		# Magnitude factor for p-polarized wave mixing.
+		pFacM = /((wvc^2 + conj(swv) * twv) * (wvc^2 - swv * conj(twv)), abs(tRsp) * abs(sRsp))
+		## Polarization contributions
+		pPol = /(abs(xfrCff[1, pr])^2 * tLyrFacR * pFacR + abs(xfrCff[2, pr])^2 * tLyrFacL * pFacL, imag(twv)) + /(2.0 * imag(xfrCff[1, pr] * conj(xfrCff[2, pr]) * tLyrFacM * pFacM), real(twv)) 	
+		
+		sPol = /(abs(xfrCff[3, pr])^2 * tLyrFacR + abs(xfrCff[4, pr])^2 * tLyrFacL, imag(twv)) + /(2.0 * imag(xfrCff[3, pr] * conj(xfrCff[4, pr]) * tLyrFacM), real(twv))
+		# Correct possible NaN underflow.
+		if isnan(/(sLyrFac * (pPol + sPol), imag(swv)))
+
+			tfrVal[pr] += 0.0
+		else
+			# Impose theoretical transfer cut off in case of numerical inaccuracy.
+			tfrVal[pr] += scl * wvc * (min(1.0, /(sLyrFac * pPol, 4.0 * imag(swv) * abs(swv)^2)) + min(1.0, /(sLyrFac * sPol, 4.0 * imag(swv) * abs(swv)^2)))
 		end
 	end
 
-	# Transmission coefficients between cell pair.
-	trnCf .= [xfrTrn[1], xfrTrn[3]]
-	# Reflection coefficients for right edge of left cell. 
-	refLR .= [xfrRef[2], xfrRef[4]]
-	
-	return relFlm(lVarL, enr, wvc, (lLyr, rLyr), [trnCf; refLL; refLR; refRL; refRR])
+	return nothing
 end
 """
-	flxIntFunc(lVar::lyrDsc, lPair::Tuple{Int64,Int64}, enr::Float64, wvc::Float64, trfCff::Array{ComplexF64,1})::Float64
-
-Inner function computing wave vector integrand for heat flux between a pair of layers. 
-"""
-function flxIntFunc(lVar::lyrDsc, lPair::Tuple{Int64,Int64}, enr::Float64, wvc::Float64, trfCff::Array{ComplexF64,1})::Float64
-	# Permittivity response. 
-	sRsp = lVar.rspPrf[lPair[1]](enr)
-	tRsp = lVar.rspPrf[lPair[2]](enr)
-	# Perpendicular wave vectors.
-	swv = wvcPrp(sRsp, lyrTckRel(lVar, lPair[1], enr), wvc)
-	twv = wvcPrp(tRsp, lyrTckRel(lVar, lPair[2], enr), wvc)
-	# Layer thickness factors.
-	# Account for possible finite thickness of source layer.
-	if (lPair[1] != 1) && (lPair[1] != length(lVar.tmpLst))
-
-		sLyrFac = (1.0 - exp(-4.0 * pi * imag(swv) * lyrTckRel(lVar, lPair[1], enr)))		
-	else
-
-		sLyrFac = 1.0
-	end
-	# Account for possible finite thickness of target layer. 
-	# If lPair[1] > lPair[2], field transfer coefficients are computed for a mirror system. 
-	# Hence, only ``right'' moving coefficients, trfCff[1] and trfCff[3] need to be considered.
-	if (lPair[2] != 1) && (lPair[2] != length(lVar.tmpLst))
-
-		lTck = lyrTckRel(lVar, lPair[2], enr)
-		# Single layer factor comes from shifting factors to avoid overflow.
-		tLyrFacR = 1.0 - exp(-4.0 * pi * imag(twv) * lTck)
-		tLyrFacL = exp(-4.0 * pi * imag(twv) * lTck) * (1.0 - exp(-4.0 * pi * imag(twv) * lTck))
-		tLyrFacM = exp(-4.0 * pi * lTck * (im * real(twv) + imag(twv))) * (1.0 - exp(4.0 * pi * im * real(twv) * lTck))
-	else
-		
-		tLyrFacR = 1.0 
-		tLyrFacL = 0.0
-		tLyrFacM = 0.0
-	end
-	
-	# Integrand components.
-	intFac = /(imag(sRsp) * imag(tRsp), 4.0 * abs(swv)^2)
-	srcFac = /(sLyrFac, imag(swv))
-	# Magnitude factor for p-polarized right moving waves.
-	pFacR = /(abs(wvc^2 + conj(swv) * twv)^2, abs(tRsp) * abs(sRsp))
-	# Magnitude factor for p-polarized left moving waves.
-	pFacL = /(abs(wvc^2 - conj(swv) * twv)^2, abs(tRsp) * abs(sRsp))
-	# Magnitude factor for p-polarized wave mixing.
-	pFacM = /((wvc^2 + conj(swv) * twv) * (wvc^2 - swv * conj(twv)), abs(tRsp) * abs(sRsp))
-	## Polarization contributions
-	pPol = /(abs(trfCff[1])^2 * tLyrFacR * pFacR + abs(trfCff[2])^2 * tLyrFacL * pFacL, imag(twv)) + /(2.0 * imag(trfCff[1] * conj(trfCff[2]) * tLyrFacM * pFacM), real(twv)) 	
-	
-	sPol = /(abs(trfCff[3])^2 * tLyrFacR + abs(trfCff[4])^2 * tLyrFacL, imag(twv)) + /(2.0 * imag(trfCff[3] * conj(trfCff[4]) * tLyrFacM), real(twv))
-
-	# Correct possible NaN underflow.
-	if isnan(intFac * srcFac * (pPol + sPol))
-
-		return 0.0
-	else
-		# Impose theoretical transfer cut off in case of numerical inaccuracy.
-		return wvc * (min(1.0, intFac * srcFac * pPol) + min(1.0, intFac * srcFac * sPol))
-	end
-end
-"""
-	evaVarED
+	evaVarED(dlt::Float64, uvc::Float64)::Float64
 
 Variable transformation for decaying waves. 
 """
@@ -502,14 +587,18 @@ function evaVarED(dlt::Float64, uvc::Float64)::Float64
 end
 """
 	
-	flxFncED(lVar::lyrDsc, lPair::Tuple{Int64,Int64}, enr::Float64, uvc::Float64)::Float64
+	tfrFncED!(lVar::lyrDsc, lPairs::Array{Int64,2}, enr::Float64, uvc::Float64, bdrArrL::SubArray{ComplexF64,2}, bdrArrR::SubArray{ComplexF64,2}, imdCff::SubArray{ComplexF64,2}, xfrCff::SubArray{ComplexF64,2}, tfrInt::Array{Float64,1})::Nothing
 
 Integrand for evanescent tail of heat flux. 
 """
-function flxFncED(lVar::lyrDsc, lPair::Tuple{Int64,Int64}, dlt::Float64, enr::Float64, uvc::Float64)::Float64
-
+function tfrFncED!(lVar::lyrDsc, lPairs::Array{Int64,2}, enr::Float64, uvc::Float64, bdrArrL::SubArray{ComplexF64,2}, bdrArrR::SubArray{ComplexF64,2}, imdCff::SubArray{ComplexF64,2}, xfrCff::SubArray{ComplexF64,2}, tfrInt::Array{Float64,1})::Nothing
+	# Reset value of tfrInt 
+	tfrInt .= zeros(Float64, size(lPairs)[2])
+	# Calculate field transfer coefficients. 
+	tfrFlm!(lVar, lPairs, enr, evaVarED(intDltInf, uvc), bdrArrL, bdrArrR, imdCff, xfrCff)
 	# Evanescent integrand for quadrature integration. 
-	return /(flxIntFunc(lVar, lPair, enr, evaVarED(intDltInf, uvc), tfrFlm(lVar, enr, evaVarED(intDltInf, uvc), lPair)), cos(/(pi, 2.0) * uvc - intDltInf)^2)
+	tfrFunc!(lVar, lPairs, enr, evaVarED(intDltInf, uvc), xfrCff, /(1.0, cos(/(pi, 2.0) * uvc - intDltInf)^2), tfrInt)
+	return nothing
 end
 """
 	evaVarEILD(cen::Float64, dlt::Float64, uvc::Float64)::Float64
@@ -522,56 +611,65 @@ function evaVarEILD(cen::Float64, dlt::Float64, uvc::Float64)::Float64
 end
 """
 	
-	flxFncEILD(lVar::lyrDsc, lPair::Tuple{Int64,Int64}, enr::Float64, shft::Float64, lwb::Float64, uvc::Float64)::Float64
+	tfrFncEILD!(lVar::lyrDsc, lPairs::Array{Int64,2}, cen::Float64, wdt::Float64, dlt::Float64, enr::Float64, uvc::Float64, bdrArrL::SubArray{ComplexF64,2}, bdrArrR::SubArray{ComplexF64,2}, imdCff::SubArray{ComplexF64,2}, xfrCff::SubArray{ComplexF64,2}, tfrInt::Array{Float64,1})::Nothing
 
 Double Lorentzian scaled integrand for ``intermediate waves''. 
 """
-function flxFncEILD(lVar::lyrDsc, lPair::Tuple{Int64,Int64}, cen::Float64, wdt::Float64, dlt::Float64, enr::Float64, uvc::Float64)::Float64
-
+function tfrFncEILD!(lVar::lyrDsc, lPairs::Array{Int64,2}, cen::Float64, wdt::Float64, dlt::Float64, enr::Float64, uvc::Float64, bdrArrL::SubArray{ComplexF64,2}, bdrArrR::SubArray{ComplexF64,2}, imdCff::SubArray{ComplexF64,2}, xfrCff::SubArray{ComplexF64,2}, tfrInt::Array{Float64,1})::Nothing
+	# Reset value of tfrInt 
+	tfrInt .= zeros(Float64, size(lPairs)[2])
+	# Calculate field transfer coefficients. 
+	tfrFlm!(lVar, lPairs, enr, evaVarEILD(cen, dlt, uvc), bdrArrL, bdrArrR, imdCff, xfrCff)
+	# Evanescent integrand for quadrature integration. 
+	tfrFunc!(lVar, lPairs, enr, evaVarEILD(cen, dlt, uvc), xfrCff, /(1.0, 4.0 * uvc * sqrt(sqrt(uvc) - ^(dlt, 2))), tfrInt)
+	# Second portion of integral.
+	tfrFlm!(lVar, lPairs, enr, evaVarEILD(cen, dlt, ^(wdt^2 + dlt^2, -2)) - evaVarEILD(cen, dlt, uvc), bdrArrL, bdrArrR, imdCff, xfrCff)
 	# Intermediate field integrand for quadrature integration. 
-	return /(flxIntFunc(lVar, lPair, enr, evaVarEILD(cen, dlt, uvc), tfrFlm(lVar, enr, evaVarEILD(cen, dlt, uvc), lPair)) + flxIntFunc(lVar, lPair, enr, evaVarEILD(cen, dlt, ^(wdt^2 + dlt^2, -2)) - evaVarEILD(cen, dlt, uvc), tfrFlm(lVar, enr, evaVarEILD(cen, dlt, ^(wdt^2 + dlt^2, -2)) - evaVarEILD(cen, dlt, uvc), lPair)), 4.0 * uvc * sqrt(sqrt(uvc) - ^(dlt, 2)))
+	tfrFunc!(lVar, lPairs, enr, evaVarEILD(cen, dlt, ^(wdt^2 + dlt^2, -2)) - evaVarEILD(cen, dlt, uvc), xfrCff, /(1.0, 4.0 * uvc * sqrt(sqrt(uvc) - ^(dlt, 2))), tfrInt)
+
+	return nothing
 end
 """
 	
-	flxFncPR(lVar::lyrDsc, lPair::Tuple{Int64,Int64}, enr::Float64, uvc::Float64)::Float64
+	function tfrFncPR!(lVar::lyrDsc, lPairs::Array{Int64,2}, enr::Float64, uvc::Float64, bdrArrL::Array{ComplexF64,2}, bdrArrR::Array{ComplexF64,2}, imdCff::Array{ComplexF64,2}, xfrCff::Array{ComplexF64,2}, tfrInt::Array{Float64,1})::Nothing
 
 Integrand for propagating portion of heat flux. 
 """
-function flxFncPR(lVar::lyrDsc, lPair::Tuple{Int64,Int64}, enr::Float64, uvc::Float64)::Float64
-
+function tfrFncPR!(lVar::lyrDsc, lPairs::Array{Int64,2}, enr::Float64, uvc::Float64, bdrArrL::SubArray{ComplexF64,2}, bdrArrR::SubArray{ComplexF64,2}, imdCff::SubArray{ComplexF64,2}, xfrCff::SubArray{ComplexF64,2}, tfrInt::Array{Float64,1})::Nothing
+	# Reset value of tfrInt 
+	tfrInt .= zeros(Float64, size(lPairs)[2])
+	# Calculate field transfer coefficients. 
+	tfrFlm!(lVar, lPairs, enr, uvc, bdrArrL, bdrArrR, imdCff, xfrCff)
 	# Propagating field integrand for quadrature integration.
-	return flxIntFunc(lVar, lPair, enr, uvc, tfrFlm(lVar, enr, uvc, lPair))
+	tfrFunc!(lVar, lPairs, enr, uvc, xfrCff, 1.0, tfrInt)
+
+	return nothing
 end
 """
 
-	function iwLocs(lVar::lyrDsc, enr::Float64)::Array{Float64,2}
+	iwLocs(lVar::lyrDsc, enr::Float64)::Array{Float64,2}
 
 Determine location and spacing for intermediate wave transformations. 
 Note that output may have NaN entries, and function relies on global constants. 
 """
-function iwLocs(lVar::lyrDsc, lPair::Tuple{Int64,Int64}, enr::Float64)::Array{Float64,2}
+function iwLocs(lVar::lyrDsc, enr::Float64)::Array{Float64,2}
 	
 	iwLcs = Float64[]
-	
+	iwWdt = Float64[]
 	# Find possible points needing more precise treatment.
 	for rsp in unique(lVar.rspPrf)
 
 		if /(real(rsp(enr)), imag(rsp(enr))) > iTrnV && imag(rsp(enr)) > 0
-
-			push!(iwLcs, sqrt(real(rsp(enr)))) 	
+			# Locations
+			push!(iwLcs, sqrt(real(rsp(enr))))
+			# Widths
+			push!(iwWdt, imag(rsp(enr)))
 		end
 	end
 
-	sort!(iwLcs)
-	# Determine intermediate wave widths.
-	iwWdt = Array{Float64}(undef, length(iwLcs))
-
-	quadFlxPR(evlPt) = flxFncPR(lVar, lPair, enr, evlPt)
-
-	for ind in 1:length(iwWdt)
-
-		iwWdt[ind] = fndWdt(quadFlxPR, iwLcs[ind], quadFlxPR(iwLcs[ind]), lcWdt, lcRel)
-	end
+	srtInd = sortperm(iwLcs)
+	iwLcs .= iwLcs[srtInd]
+	iwWdt .= iwWdt[srtInd]
 	# Remove locations that are too close together. 
 	curr = 1
 	
@@ -604,30 +702,43 @@ function iwLocs(lVar::lyrDsc, lPair::Tuple{Int64,Int64}, enr::Float64)::Array{Fl
 			curr = ind + 1
 		end
 	end
-	# Order remaining locations
-	iwDsc = sort([iwLcs iwWdt], dims = 1)
-	return iwDsc
+	# Reorder remaining locations
+	srtInd = sortperm(iwLcs)
+	iwLcs .= iwLcs[srtInd]
+	iwWdt .= iwWdt[srtInd]
+	
+	return [iwLcs iwWdt]
 end
 """
 	
-	femFlx(lVar::lyrDsc, lPair::Tuple{Int64,Int64}, enr::Float64)::Float64
+	tfrIntEv!(lVar::lyrDsc, lPairs::Array{Int64,2}, enrPts::Union{StepRangeLen{Float64},Array{Float64,1}}, trgPts::Array{Float64,2})::Nothing
 
-Thermal flux between a pair of layers per ev cm^2. 
+Threaded transfer function integrand between a pair of layers. 
+When multiplied with flxPfc result is heat transfer per ev cm^2. 
 """
-# mode == 0 only includes evanescent contribution beyond k/ko > 5. 
-# mode == 1 calculates full heat flux, without variable transformation for intermediate waves.
-# mode == 2 calculates full heat flux, with variable transformation for intermediate waves. 
-function femFlx(lVar::lyrDsc, lPair::Tuple{Int64,Int64}, enr::Float64, mode::Int)::Float64
-
-	# Define single variable functions for quadrature integration.
-	# Propagating waves
-	quadFlxPR(evlPt) = flxFncPR(lVar, lPair, enr, evlPt)
-	# # Rapidly decaying waves, intDltInf sets effective upper bound as tan(pi/2 - inDlt)
-	quadFlxED(evlPt) = flxFncED(lVar, lPair, intDltInf, enr, evlPt)
-	# # Treat intermediate waves. 
-	if mode == 2
+function tfrIntEv!(lVar::lyrDsc, lPairs::Array{Int64,2}, enrPts::Union{StepRangeLen{Float64},Array{Float64,1}}, trgPts::Array{Float64,2})::Nothing
+	# Number of layer pairs 
+	numLyrs = size(lPairs)[2]
+	# Obtain number of active threads. 
+	threads = nthreads()
+	# Preallocate working memory for repeated function calls.
+	# Boundary field transfer coefficients.
+	bdrArrL = Array{ComplexF64,3}(undef, 4, length(lVar.tmpLst) - 1, threads)
+	bdrArrR = Array{ComplexF64,3}(undef, 4, length(lVar.tmpLst) - 1, threads)
+	# Intermediate layer field coefficients. 
+	imdCff = Array{ComplexF64,3}(undef, 10, size(lPairs)[2], threads)
+	# Layer pair transfer coefficients. 
+	xfrCff = Array{ComplexF64,3}(undef, 4, size(lPairs)[2], threads)
+	
+	@threads for enrInd = 1 : length(enrPts)
+		# Define single variable functions for quadrature integration.
+		# Propagating waves
+		tfrIntPR!(uvc, intVals) = @views tfrFncPR!(lVar, lPairs, enrPts[enrInd], uvc, bdrArrL[:,:,threadid()], bdrArrR[:,:,threadid()], imdCff[:,:,threadid()], xfrCff[:,:,threadid()], intVals)
+		# Rapidly decaying waves, intDltInf sets effective upper bound as tan(pi/2 - inDlt)
+		tfrIntED!(uvc, intVals) = @views tfrFncED!(lVar, lPairs, enrPts[enrInd], uvc, bdrArrL[:,:,threadid()], bdrArrR[:,:,threadid()], imdCff[:,:,threadid()], xfrCff[:,:,threadid()], intVals)
+		# # Treat intermediate waves. 
 		# Determine intermediate wave locations.
-		iwDsc = iwLocs(lVar, lPair, enr)
+		iwDsc = iwLocs(lVar, enrPts[enrInd])
 		# Account for possible NaN entries.
 		nans = findfirst(isnan, view(iwDsc, :, 1))
 
@@ -640,57 +751,51 @@ function femFlx(lVar::lyrDsc, lPair::Tuple{Int64,Int64}, enr::Float64, mode::Int
 		end
 		# Compute integral, filling in portions not treated as intermediate waves with 
 		# linear quadrature.
-		if iwDsc[1, 1] - iwDsc[1, 2] > 1.0e-6
+		if iwDsc[1,1] - iwDsc[1,2] > 1.0e-6
 		
-			intVal = quadgk(quadFlxPR, 0.0, iwDsc[1, 1] - iwDsc[1, 2], rtol = relTol, order = 16)[1]
+			trgPts[:,enrInd] .= hquadrature(numLyrs, tfrIntPR!, 0.0, iwDsc[1,1] - iwDsc[1,2], reltol = cubTol, error_norm = Cubature.INDIVIDUAL)[1]
 		else
 
-			intVal = 0.0
+			trgPts[:,enrInd] .= 0.0
 		end
 
 		for ind in 1:numIW
 
 			# Width parameter for double Lorentzian.
-			dltIW = min(^(quadFlxPR(iwDsc[ind, 1]), - 0.5), /(iwDsc[ind, 2], 10.0))
+			dltIW = /(iwDsc[ind, 2], 10.0)
 			# Transformed flux integrand
-			quadFlxEILD(evlPt) = flxFncEILD(lVar, lPair, iwDsc[ind, 1], iwDsc[ind, 2], dltIW, enr, evlPt)
+			trfIntEILD!(uvc, intVals) = @views tfrFncEILD!(lVar, lPairs, iwDsc[ind, 1], iwDsc[ind, 2], dltIW, enrPts[enrInd], uvc, bdrArrL[:,:,threadid()], bdrArrR[:,:,threadid()], imdCff[:,:,threadid()], xfrCff[:,:,threadid()], intVals)
 			# Perform integrations
-			intVal += quadgk(quadFlxEILD, ^(^(iwDsc[ind, 2], 2) + ^(dltIW, 2), -2), ^(dltIW, -4) , rtol = relTol, order = qudOrd)[1]
+			trgPts[:,enrInd] .+= hquadrature(numLyrs, trfIntEILD!, ^(^(iwDsc[ind,2], 2) + ^(dltIW, 2), -2), ^(dltIW, -4), reltol = cubTol, error_norm = Cubature.INDIVIDUAL)[1]
+			# quadgk(quadFlxEILD, ^(^(iwDsc[ind, 2], 2) + ^(dltIW, 2), -2), ^(dltIW, -4) , rtol = cubTol, order = qudOrd)[1]
 
 			if ind < numIW
 				
-				intVal += quadgk(quadFlxPR, iwDsc[ind, 1] + iwDsc[ind, 2], iwDsc[ind + 1, 1] - iwDsc[ind + 1, 2], rtol = relTol, order = qudOrd)[1]
+				trgPts[:,enrInd] .+= hquadrature(numLyrs, tfrIntPR!, iwDsc[ind, 1] + iwDsc[ind, 2], iwDsc[ind + 1, 1] - iwDsc[ind + 1, 2], reltol = cubTol, error_norm = Cubature.INDIVIDUAL)[1]
+				# quadgk(quadFlxPR, iwDsc[ind, 1] + iwDsc[ind, 2], iwDsc[ind + 1, 1] - iwDsc[ind + 1, 2], rtol = cubTol, order = qudOrd)[1]
 			end	
 		end
 		# # Transition to decaying waves  
 		if iwDsc[numIW, 1] + iwDsc[numIW, 2] < 10.0
 		
-			intVal += quadgk(quadFlxPR, iwDsc[numIW, 1] + iwDsc[numIW, 2], 10.0, rtol = relTol, order = qudOrd)[1]
-			
+			trgPts[:,enrInd] .+= hquadrature(numLyrs, tfrIntPR!, iwDsc[numIW, 1] + iwDsc[numIW, 2], 10.0, reltol = cubTol, error_norm = Cubature.INDIVIDUAL)[1]
+			# quadgk(quadFlxPR, iwDsc[numIW, 1] + iwDsc[numIW, 2], 10.0, rtol = cubTol, order = qudOrd)[1]
 			evaDecTrn = /(2.0 * atan(10.0), pi)
 
 		else
 
 			evaDecTrn = /(2.0 * atan(iwDsc[numIW, 1] + iwDsc[numIW, 2]), pi)
 		end
-	
-	elseif mode == 1
+		# Compute decaying wave contribution 
+		trgPts[:,enrInd] .+= hquadrature(numLyrs, tfrIntED!, evaDecTrn, 1.0, reltol = cubTol, error_norm = Cubature.INDIVIDUAL)[1]
+		# quadgk(quadFlxED, evaDecTrn, 1.0, rtol = cubTol, order = qudOrd)[1]
+		# Include layer specific prefactor
+		for lyrPair = 1:numLyrs
 
-		 intVal = quadgk(quadFlxPR, 0.0, 1.0, rtol = relTol, order = qudOrd)[1]
-		 evaDecTrn = /(2.0 * atan(1.0), pi)
-	
-	elseif mode == 0
-		
-		intVal = 0.0
-		evaDecTrn = /(2.0 * atan(5.0), pi)	
-	else
-
-		error("Unrecognized flux calculation mode.")
-		return nothing
+			trgPts[lyrPair,enrInd] *= flxPfc(lVar, lPairs[:,lyrPair], enrPts[enrInd])
+		end
 	end
-	# Compute decaying wave contribution 
-	intVal += quadgk(quadFlxED, evaDecTrn, 1.0, rtol = relTol, order = qudOrd)[1]
 
-	return flxPfc(lVar, lPair, enr) * intVal
+	return nothing
 end
-# end
+ # end 

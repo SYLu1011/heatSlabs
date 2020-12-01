@@ -1,4 +1,55 @@
 """
+
+	fndMax(f::Any, lb::Float64, ub::Float64, wdt::Float64, prc::Float64)::Float64
+
+# Naively locate the maximum of a function within a specified interval.
+"""
+function fndMax(f::Any, lb::Float64, ub::Float64, wdt::Float64, prc::Float64)::Tuple{Float64, Float64}
+
+	lWdt = wdt
+	r = lb : wdt : ub
+	(val, ind) = findmax(f.(r))
+
+	while lWdt > prc
+		
+		lWdt *= 0.1
+		
+		if ind > 1 && ind < length(r)
+
+			r = r[ind - 1] : lWdt : r[ind + 1]
+		elseif ind == 1
+
+			r = r[1] : lWdt : r[2]
+		else
+
+			r = r[end - 1] : lWdt : r[end]
+		end
+
+		(val, ind) = findmax(f.(r))
+	end
+
+	return (val, r[ind])
+end
+"""
+
+	fndWdt(f::Any, sLoc::Float64, sVal::Float64, initWdt::Float64, relV::Float64)::Float64
+
+# Naively determine width of nearly singular behavior.
+"""
+function fndWdt(f::Any, sLoc::Float64, sVal::Float64, initWdt::Float64, relV::Float64)::Float64
+
+	lrelV = 1.0
+	lWdt = 2.0 * initWdt
+
+	while lrelV < relV
+		
+		lWdt *= 0.5	
+		lrelV = /(f(sLoc + lWdt), sVal)
+	end
+
+	return lWdt
+end
+"""
 	testFlxIntFunc(lVar::lyrDsc, lPair::Tuple{Int64,Int64}, enr::Float64, wvc::Float64)::Float64
 
 Known wavevector integrand for heat transfer across a slab, three layer, structure. 
