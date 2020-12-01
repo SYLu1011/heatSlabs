@@ -25,7 +25,6 @@ function hStep(arg::Float64)::Float64
 		return 0.0
 	end
 end
-
 ### Silicon carbide.
 """
 
@@ -45,8 +44,15 @@ function sicRsp(enr::Float64)::ComplexF64
 
 	return 6.7 * (1.0 + /(enrL^2.0 - enrT^2.0, enrT^2.0 - enr^2.0 - im * enrD * enr))
 end
-
 ### Silicon 
+# Sample usage
+# Boron p-type doping
+# brnDpt = dptDsc(0.044, 1.0e18)
+# Empty doping
+# nllDpt = dptDsc(0.0, 0.0)
+# Calculate silicon model parameters
+# siModE = prmMSi(tmpLst[1], nllDpt, nllDpt)
+# siRspE(enr) = siRsp(enr, siModE)
 """
 Data structure holding computed model parameters for the permittivity response of silicon for 
 given dopant properties at a fixed temperature. Call prmMSi(tmp::Float64, dnr::dptDsc, 

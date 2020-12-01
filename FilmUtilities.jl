@@ -1,6 +1,7 @@
+# See readme for module description. 
 module FilmUtilities
 using Base.Threads, Cubature, ProgressMeter
-export lyrDsc, plnFnc, tfrIntEv!
+export lyrDsc, plnFnc, tfrIntEv!, heatTfr!
 ## Constants
 # Relative tolerance for cubature.
 const cubTol = 1.0e-4
@@ -12,7 +13,7 @@ const intDltInf = 1.0e-4
 const lcWdt = 1.0e-3
 # Desired relative magnitude for defining width of ``intermediate wave'' behavior. 
 const lcRel = 5.0e-2
-# Ratio of /(real(rsp(ener)), imag(rsp(ener))) before result is treated as intermediate wave. 
+# Ratio of /(real(rsp(ener)), imag(rsp(ener))) before intermediate wave point is created. 
 const iTrnV = 1.0e3
 # Near light line normalization, effectively number of wavelengths before decay.
 const mxSz = 50.0
@@ -31,8 +32,6 @@ const evJ = 1.602176565e-19
 include("filmDataStructures.jl")
 # Repository functions no longer being used, but possibly helpful for testing. 
 # include("filmUtilitiesRepo.jl")
-# Functions definitions for calculating heat transfer between two layered infinite half spaces. 
-# See notes for theoretical details.
 """
 
 	geoSrs(intTrm::ComplexF64, geoFct::ComplexF64)::ComplexF64
@@ -63,7 +62,7 @@ end
 
 	wvcPrp(rsp::ComplexF64, lTck::Float64, wvc::Float64)::ComplexF64
 
-Perpendicular wave, incorporating effective normalization.
+Normalized perpendicular wave, incorporating an effective normalization.
 """
 @inline function wvcPrp(rsp::ComplexF64, lTck::Float64, wvc::Float64)::ComplexF64
 
@@ -135,16 +134,20 @@ Compute total structure thickness in units of relative wavelength.
 end
 """
 
-	xfrBdr(kPrp::NTuple{2,ComplexF64}, rsp::NTuple{2,ComplexF64})::Array{ComplexF64,1}
+	xfrBdr!(kPrp::NTuple{2,ComplexF64}, rsp::NTuple{2,ComplexF64}, bdrArr::Union{Array{ComplexF64,1},SubArray{ComplexF64,1}})::Nothing
 
 Isotopic electric reflection and transmission coefficients for two half spaces. 
-First entries in the permittivity (rps) and wave vector (kPrp) tuples are consider to be incident. 
-The first two entries returned are for 'p' polarized waves, the next two for 's' polarized waves. 
-Odd numbers are transmission, even modes are reflection.
 """
-@inline function xfrBdr(kPrp::NTuple{2,ComplexF64}, rsp::NTuple{2,ComplexF64})::Array{ComplexF64,1}
+# First entries in the permittivity (rps) and wave vector (kPrp) tuples are consider to be 
+# incident. 
+# The first two entries returned are for 'p' polarized waves, the next two for 's' 
+# polarized waves. 
+# Odd numbers are transmission, even modes are reflection.
+@inline function xfrBdr!(kPrp::NTuple{2,ComplexF64}, rsp::NTuple{2,ComplexF64}, bdrArr::Union{Array{ComplexF64,1},SubArray{ComplexF64,1}})::Nothing
 	# Fresnel coefficients.
-	return [/(2.0 * zSqrt(rsp[1] * rsp[2]) * kPrp[1], rsp[1] * kPrp[2] + rsp[2] * kPrp[1]), /(rsp[1] * kPrp[2] - rsp[2] * kPrp[1], rsp[1] * kPrp[2] + rsp[2] * kPrp[1]), /(2.0 * kPrp[1], kPrp[2] + kPrp[1]), /(kPrp[2] - kPrp[1], kPrp[2] + kPrp[1])]
+	copyto!(bdrArr, [/(2.0 * zSqrt(rsp[1] * rsp[2]) * kPrp[1], rsp[1] * kPrp[2] + rsp[2] * kPrp[1]), /(rsp[1] * kPrp[2] - rsp[2] * kPrp[1], rsp[1] * kPrp[2] + rsp[2] * kPrp[1]), /(2.0 * kPrp[1], kPrp[2] + kPrp[1]), /(kPrp[2] - kPrp[1], kPrp[2] + kPrp[1])])
+
+	 return nothing
 end
 """
 
@@ -162,14 +165,14 @@ between half-spaces.
 
 		for bdr = 1 : length(lVar.bdrLoc)
 
-			bdrArr[:,bdr] .= xfrBdr((wvcPrp(lVar.rspPrf[bdr](enr), lyrTckRel(lVar, bdr, enr), wvc), wvcPrp(lVar.rspPrf[bdr + 1](enr), lyrTckRel(lVar, bdr + 1, enr), wvc)), (lVar.rspPrf[bdr](enr), lVar.rspPrf[bdr + 1](enr)))
+			@views xfrBdr!((wvcPrp(lVar.rspPrf[bdr](enr), lyrTckRel(lVar, bdr, enr), wvc), wvcPrp(lVar.rspPrf[bdr + 1](enr), lyrTckRel(lVar, bdr + 1, enr), wvc)), (lVar.rspPrf[bdr](enr), lVar.rspPrf[bdr + 1](enr)), bdrArr[:,bdr])
 		end
 	# Larger indices are treated as initial. 
 	elseif mode == 2
 
 		for bdr = 1 : length(lVar.bdrLoc)
 			
-			bdrArr[:,bdr] .= xfrBdr((wvcPrp(lVar.rspPrf[bdr + 1](enr), lyrTckRel(lVar, bdr + 1, enr), wvc), wvcPrp(lVar.rspPrf[bdr](enr), lyrTckRel(lVar, bdr, enr), wvc)), (lVar.rspPrf[bdr + 1](enr), lVar.rspPrf[bdr](enr)))
+			@views xfrBdr!((wvcPrp(lVar.rspPrf[bdr + 1](enr), lyrTckRel(lVar, bdr + 1, enr), wvc), wvcPrp(lVar.rspPrf[bdr](enr), lyrTckRel(lVar, bdr, enr), wvc)), (lVar.rspPrf[bdr + 1](enr), lVar.rspPrf[bdr](enr)), bdrArr[:,bdr])
 		end
 	else
 
@@ -235,13 +238,13 @@ See associated notes for additional details.
 end
 """
 
-	relFlm(lVar::lyrDsc, enr::Float64, wvc::Float64, lPair::Union{Array{Int64,1},SubArray{Int64,1}}, imdCff::Union{Array{ComplexF64,1},SubArray{ComplexF64,1}})::Array{ComplexF64,1}
+	relFlm!(lVar::lyrDsc, enr::Float64, wvc::Float64, lPair::Union{Array{Int64,1},SubArray{Int64,1}}, imdCff::Union{Array{ComplexF64,1},SubArray{ComplexF64,1}}, xfrCff::Union{Array{ComplexF64,1},SubArray{ComplexF64,1}})::Nothing
 
 Relative field amplitude coefficients from transfer coefficients. 
 """
 # imdCff[:, lyr] = [trnCf; refLeftCellLeft; refLeftCellRight; refRightCellLeft; 
 # refRightCellRight], with p-pol followed by s-pol in each. 
-function relFlm(lVar::lyrDsc, enr::Float64, wvc::Float64, lPair::Union{Array{Int64,1},SubArray{Int64,1}}, imdCff::Union{Array{ComplexF64,1},SubArray{ComplexF64,1}})::Array{ComplexF64,1}
+function relFlm!(lVar::lyrDsc, enr::Float64, wvc::Float64, lPair::Union{Array{Int64,1},SubArray{Int64,1}}, imdCff::Union{Array{ComplexF64,1},SubArray{ComplexF64,1}}, xfrCff::Union{Array{ComplexF64,1},SubArray{ComplexF64,1}})::Nothing
 	# Layer phase propagation. 
 	if lPair[1] > 1
 
@@ -263,7 +266,9 @@ function relFlm(lVar::lyrDsc, enr::Float64, wvc::Float64, lPair::Union{Array{Int
 	sDrs = abs(geoSrs(1.0 + im * 0.0, imdCff[4] * lLyrPhz * imdCff[6] * lLyrPhz)) * abs(geoSrs(1.0 + im * 0.0, imdCff[8] * rLyrPhz * imdCff[10] * rLyrPhz))
 	# Propagation term that should be included in left moving waves is shifted to the 
 	# flux integrand to avoid overflow. 
-	return [pDrs * imdCff[1], imdCff[9] * imdCff[1], sDrs * imdCff[2], sDrs * imdCff[10] * imdCff[2]]
+	copyto!(xfrCff, [pDrs * imdCff[1], imdCff[9] * imdCff[1], sDrs * imdCff[2], sDrs * imdCff[10] * imdCff[2]])
+
+	return nothing
 end
 """
 	
@@ -489,7 +494,7 @@ function tfrFlm!(lVar::lyrDsc, lPairs::Array{Int64,2}, enr::Float64, wvc::Float6
 	# Calculate total field transmission coefficients.
 	for lP = 1:size(lPairs)[2]
 	
-		xfrCff[:, lP] .= relFlm(lVar, enr, wvc, view(lPairs, :, lP), view(imdCff, :, lP))
+		@views relFlm!(lVar, enr, wvc, lPairs[:,lP], imdCff[:,lP], xfrCff[:,lP])
 	end
 
 	return nothing
@@ -566,12 +571,14 @@ function tfrFunc!(lVar::lyrDsc, lPairs::Array{Int64,2}, enr::Float64, wvc::Float
 			tfrVal[pr] += 0.0
 		else
 			# Impose theoretical transfer cut off in case of numerical inaccuracy.
-			tfrVal[pr] += scl * wvc * (min(1.0, /(imag(lVar.rspPrf[lPairs[1,pr]](enr)) * imag(lVar.rspPrf[lPairs[2,pr]](enr)) * sLyrFac * pPol, 4.0 * imag(swv) * abs(swv)^2)) + min(1.0, /(imag(lVar.rspPrf[lPairs[1,pr]](enr)) * imag(lVar.rspPrf[lPairs[2,pr]](enr)) * sLyrFac * sPol, 4.0 * imag(swv) * abs(swv)^2)))
+			tfrVal[pr] += scl * wvc * (min(/(imag(lVar.rspPrf[lPairs[1,pr]](enr)) * imag(lVar.rspPrf[lPairs[2,pr]](enr)), real(lVar.tfrFac[lPairs[1,pr]](enr) * lVar.tfrFac[lPairs[2,pr]](enr))), /(real(lVar.tfrFac[lPairs[1,pr]](enr) * lVar.tfrFac[lPairs[2,pr]](enr)) * sLyrFac * pPol, 4.0 * imag(swv) * abs(swv)^2)) + min(/(imag(lVar.rspPrf[lPairs[1,pr]](enr)) * imag(lVar.rspPrf[lPairs[2,pr]](enr)), real(lVar.tfrFac[lPairs[1,pr]](enr) * lVar.tfrFac[lPairs[2,pr]](enr))), /(real(lVar.tfrFac[lPairs[1,pr]](enr) * lVar.tfrFac[lPairs[2,pr]](enr)) * sLyrFac * sPol, 4.0 * imag(swv) * abs(swv)^2)))
 		end
 	end
 
 	return nothing
 end
+
+
 """
 	evaVarED(dlt::Float64, uvc::Float64)::Float64
 
@@ -594,6 +601,30 @@ function tfrFncED!(lVar::lyrDsc, lPairs::Array{Int64,2}, enr::Float64, uvc::Floa
 	tfrFlm!(lVar, lPairs, enr, evaVarED(intDltInf, uvc), bdrArrL, bdrArrR, imdCff, xfrCff)
 	# Evanescent integrand for quadrature integration. 
 	tfrFunc!(lVar, lPairs, enr, evaVarED(intDltInf, uvc), xfrCff, /(1.0, cos(/(pi, 2.0) * uvc - intDltInf)^2), tfrInt)
+	
+	return nothing
+end
+"""
+	
+	tfrFncED!(lVar::lyrDsc, lPairs::Array{Int64,2}, enr::Float64, uvc::Float64, bdrArrL::Union{Array{ComplexF64,2},SubArray{ComplexF64,2}}, bdrArrR::Union{Array{ComplexF64,2},SubArray{ComplexF64,2}}, imdCff::Union{Array{ComplexF64,2},SubArray{ComplexF64,2}}, xfrCff::Union{Array{ComplexF64,2},SubArray{ComplexF64,2}}, tfrInt::Union{Array{Float64,1},SubArray{Float64,1}})::Nothing
+
+Threaded integrand for evanescent tail of heat flux. 
+"""
+function tfrFncEDTH!(lVar::lyrDsc, lPairs::Array{Int64,2}, evlPts::Union{Array{Float64,2},SubArray{Float64,2}}, bdrArrL::Union{Array{ComplexF64,3},SubArray{ComplexF64,3}}, bdrArrR::Union{Array{ComplexF64,3},SubArray{ComplexF64,3}}, imdCff::Union{Array{ComplexF64,3},SubArray{ComplexF64,3}}, xfrCff::Union{Array{ComplexF64,3},SubArray{ComplexF64,3}}, tfrInt::Union{Array{Float64,2},SubArray{Float64,2}})::Nothing
+	
+	@threads for evlInd = 1:size(evlPts)[2]
+		# Reset value of tfrInt. 
+		@views copyto!(tfrInt[:,evlInd], zeros(Float64, size(lPairs)[2]))
+		# Calculate field transfer coefficients. 
+		@views tfrFlm!(lVar, lPairs, evlPts[1,evlInd], evaVarED(intDltInf, evlPts[2,evlInd]), bdrArrL[:,:,threadid()], bdrArrR[:,:,threadid()], imdCff[:,:,threadid()], xfrCff[:,:,threadid()])
+		# Evanescent integrand for quadrature integration. 
+		@views tfrFunc!(lVar, lPairs, evlPts[1,evlInd], evaVarED(intDltInf, evlPts[2,evlInd]), xfrCff[:,:,threadid()], /(1.0, cos(/(pi, 2.0) * evlPts[2,evlInd] - intDltInf)^2), tfrInt[:,evlInd])
+		# Include heat transfer prefactor J cm^-2
+		for lyrPair = 1:size(lPairs)[2]
+
+			tfrInt[lyrPair,evlInd] *= flxPfc(lVar, lPairs[:,lyrPair], evlPts[1,evlInd])
+		end
+	end
 	
 	return nothing
 end
@@ -633,7 +664,7 @@ end
 Integrand for propagating portion of heat flux. 
 """
 function tfrFncPR!(lVar::lyrDsc, lPairs::Array{Int64,2}, enr::Float64, uvc::Float64, bdrArrL::Union{Array{ComplexF64,2},SubArray{ComplexF64,2}}, bdrArrR::Union{Array{ComplexF64,2},SubArray{ComplexF64,2}}, imdCff::Union{Array{ComplexF64,2},SubArray{ComplexF64,2}}, xfrCff::Union{Array{ComplexF64,2},SubArray{ComplexF64,2}}, tfrInt::Union{Array{Float64,1},SubArray{Float64,1}})::Nothing
-	# Reset value of tfrInt 
+	# Reset value of tfrInt. 
 	tfrInt .= zeros(Float64, size(lPairs)[2])
 	# Calculate field transfer coefficients. 
 	tfrFlm!(lVar, lPairs, enr, uvc, bdrArrL, bdrArrR, imdCff, xfrCff)
@@ -642,6 +673,31 @@ function tfrFncPR!(lVar::lyrDsc, lPairs::Array{Int64,2}, enr::Float64, uvc::Floa
 
 	return nothing
 end
+"""
+	
+	tfrFncPRTH!(lVar::lyrDsc, lPairs::Array{Int64,2}, evlPts::Union{Array{Float64,2},SubArray{Float64,2}}, bdrArrL::Union{Array{ComplexF64,3},SubArray{ComplexF64,3}}, bdrArrR::Union{Array{ComplexF64,3},SubArray{ComplexF64,3}}, imdCff::Union{Array{ComplexF64,3},SubArray{ComplexF64,3}}, xfrCff::Union{Array{ComplexF64,3},SubArray{ComplexF64,3}}, tfrInt::Union{Array{Float64,2},SubArray{Float64,2}})::Nothing
+
+Threaded integrand for propagating portion of heat flux. 
+"""
+function tfrFncPRTH!(lVar::lyrDsc, lPairs::Array{Int64,2}, evlPts::Union{Array{Float64,2},SubArray{Float64,2}}, bdrArrL::Union{Array{ComplexF64,3},SubArray{ComplexF64,3}}, bdrArrR::Union{Array{ComplexF64,3},SubArray{ComplexF64,3}}, imdCff::Union{Array{ComplexF64,3},SubArray{ComplexF64,3}}, xfrCff::Union{Array{ComplexF64,3},SubArray{ComplexF64,3}}, tfrInt::Union{Array{Float64,2},SubArray{Float64,2}})::Nothing
+	
+	@threads for evlInd = 1:size(evlPts)[2]
+		# Reset value of tfrInt. 
+		@views copyto!(tfrInt[:,evlInd], zeros(Float64, size(lPairs)[2]))
+		# Calculate field transfer coefficients. 
+		@views tfrFlm!(lVar, lPairs, evlPts[1,evlInd], evlPts[2,evlInd], bdrArrL[:,:,threadid()], bdrArrR[:,:,threadid()], imdCff[:,:,threadid()], xfrCff[:,:,threadid()])
+		# Propagating field integrand for quadrature integration.
+		@views tfrFunc!(lVar, lPairs, evlPts[1,evlInd], evlPts[2,evlInd], xfrCff[:,:,threadid()], 1.0, tfrInt[:,evlInd])
+		# Include heat transfer prefactor J cm^-2
+		for lyrPair = 1:size(lPairs)[2]
+
+			tfrInt[lyrPair,evlInd] *= flxPfc(lVar, lPairs[:,lyrPair], evlPts[1,evlInd])
+		end
+	end
+
+	return nothing
+end
+
 """
 
 	iwLocs(lVar::lyrDsc, enr::Float64)::Array{Float64,2}
@@ -709,14 +765,16 @@ end
 	
 	tfrIntEv!(lVar::lyrDsc, lPairs::Array{Int64,2}, enrPts::Union{StepRangeLen{Float64},Array{Float64,1}}, trgPts::Array{Float64,2})::Nothing
 
-Threaded transfer function integrand between a pair of layers. 
-When multiplied with flxPfc result is heat transfer per ev cm^2. 
+Threaded transfer function integrand between all pairs of layers specified in lPairs. 
+When multiplied with flxPfc result is heat transfer in J ev^-1 cm^-2. 
 """
 function tfrIntEv!(lVar::lyrDsc, lPairs::Array{Int64,2}, enrPts::Union{StepRangeLen{Float64},Array{Float64,1}}, trgPts::Array{Float64,2})::Nothing
 	# Number of layer pairs. 
-	numLyrs = size(lPairs)[2]
+	numLPairs = size(lPairs)[2]
 	# Obtain number of active threads. 
 	threads = nthreads()
+	# Relative wave vector at which to transition to atan variable transformation. 
+	wvcDecTrns = 10.0
 	# Preallocate working memory for repeated function calls.
 	# Boundary field transfer coefficients.
 	bdrArrL = Array{ComplexF64,3}(undef, 4, length(lVar.tmpLst) - 1, threads)
@@ -751,7 +809,7 @@ function tfrIntEv!(lVar::lyrDsc, lPairs::Array{Int64,2}, enrPts::Union{StepRange
 		# linear quadrature.
 		if iwDsc[1,1] - iwDsc[1,2] > 1.0e-6
 		
-			trgPts[:,enrInd] .= hquadrature(numLyrs, tfrIntPR!, 0.0, iwDsc[1,1] - iwDsc[1,2], reltol = cubTol, error_norm = Cubature.INDIVIDUAL)[1]
+			trgPts[:,enrInd] .= hquadrature(numLPairs, tfrIntPR!, 0.0, iwDsc[1,1] - iwDsc[1,2], reltol = cubTol, error_norm = Cubature.INDIVIDUAL)[1]
 		else
 
 			trgPts[:,enrInd] .= 0.0
@@ -762,35 +820,74 @@ function tfrIntEv!(lVar::lyrDsc, lPairs::Array{Int64,2}, enrPts::Union{StepRange
 			# Width parameter for double Lorentzian.
 			dltIW = /(iwDsc[ind, 2], 10.0)
 			# Transformed flux integrand.
-			trfIntEILD!(uvc, intVals) = @views tfrFncEILD!(lVar, lPairs, iwDsc[ind, 1], iwDsc[ind, 2], dltIW, enrPts[enrInd], uvc, bdrArrL[:,:,threadid()], bdrArrR[:,:,threadid()], imdCff[:,:,threadid()], xfrCff[:,:,threadid()], intVals)
+			tfrIntEILD!(uvc, intVals) = @views tfrFncEILD!(lVar, lPairs, iwDsc[ind, 1], iwDsc[ind, 2], dltIW, enrPts[enrInd], uvc, bdrArrL[:,:,threadid()], bdrArrR[:,:,threadid()], imdCff[:,:,threadid()], xfrCff[:,:,threadid()], intVals)
 			# Perform integrations.
-			trgPts[:,enrInd] .+= hquadrature(numLyrs, trfIntEILD!, ^(^(iwDsc[ind,2], 2) + ^(dltIW, 2), -2), ^(dltIW, -4), reltol = cubTol, error_norm = Cubature.INDIVIDUAL)[1]
+			trgPts[:,enrInd] .+= hquadrature(numLPairs, tfrIntEILD!, ^(^(iwDsc[ind,2], 2) + ^(dltIW, 2), -2), ^(dltIW, -4), reltol = cubTol, error_norm = Cubature.INDIVIDUAL)[1]
 
 			if ind < numIW
 				
-				trgPts[:,enrInd] .+= hquadrature(numLyrs, tfrIntPR!, iwDsc[ind, 1] + iwDsc[ind, 2], iwDsc[ind + 1, 1] - iwDsc[ind + 1, 2], reltol = cubTol, error_norm = Cubature.INDIVIDUAL)[1]
+				trgPts[:,enrInd] .+= hquadrature(numLPairs, tfrIntPR!, iwDsc[ind, 1] + iwDsc[ind, 2], iwDsc[ind + 1, 1] - iwDsc[ind + 1, 2], reltol = cubTol, error_norm = Cubature.INDIVIDUAL)[1]
 			end	
 		end
 		# Transition to decaying waves.
-		if iwDsc[numIW, 1] + iwDsc[numIW, 2] < 10.0
+		if iwDsc[numIW, 1] + iwDsc[numIW, 2] < wvcDecTrns
 		
-			trgPts[:,enrInd] .+= hquadrature(numLyrs, tfrIntPR!, iwDsc[numIW, 1] + iwDsc[numIW, 2], 10.0, reltol = cubTol, error_norm = Cubature.INDIVIDUAL)[1]
+			trgPts[:,enrInd] .+= hquadrature(numLPairs, tfrIntPR!, iwDsc[numIW, 1] + iwDsc[numIW, 2], wvcDecTrns, reltol = cubTol, error_norm = Cubature.INDIVIDUAL)[1]
 			# Transition point.
-			evaDecTrn = /(2.0 * atan(10.0), pi)
+			evaDecTrn = /(2.0 * atan(wvcDecTrns), pi)
 		else
 			# Transition point.
 			evaDecTrn = /(2.0 * atan(iwDsc[numIW, 1] + iwDsc[numIW, 2]), pi)
 		end
 		# Compute decaying wave contribution. 
-		trgPts[:,enrInd] .+= hquadrature(numLyrs, tfrIntED!, evaDecTrn, 1.0, reltol = cubTol, error_norm = Cubature.INDIVIDUAL)[1]
+		trgPts[:,enrInd] .+= hquadrature(numLPairs, tfrIntED!, evaDecTrn, 1.0, reltol = cubTol, error_norm = Cubature.INDIVIDUAL)[1]
 		# Include layer specific prefactor.
-		for lyrPair = 1:numLyrs
+		for lyrPair = 1:numLPairs
 
 			trgPts[lyrPair,enrInd] *= flxPfc(lVar, lPairs[:,lyrPair], enrPts[enrInd])
 		end
 		next!(prog)
 	end
 
+	return nothing
+end
+"""
+	
+	heatTfr!(lVar::lyrDsc, lPairs::Array{Int64,2}, enrRng::Tuple{Float64,Float64}, htPairs::Array{Float64,1})::Nothing
+
+Threaded heat transfer between all pairs of layers specified in lPairs, J cm^-2. 
+"""
+function heatTfr!(lVar::lyrDsc, lPairs::Array{Int64,2}, enrRng::Tuple{Float64,Float64}, htPairs::Array{Float64,1})::Nothing
+	# Number of layer pairs. 
+	numLPairs = size(lPairs)[2]
+	# Obtain number of active threads. 
+	threads = nthreads()
+	# Relative wave vector at which to transition to atan variable transformation. 
+	wvcDecTrns = 10.0
+	## Preallocate working memory for repeated function calls.
+	# Boundary field transfer coefficients.
+	bdrArrL = Array{ComplexF64,3}(undef, 4, length(lVar.tmpLst) - 1, threads)
+	bdrArrR = Array{ComplexF64,3}(undef, 4, length(lVar.tmpLst) - 1, threads)
+	# Intermediate layer field coefficients. 
+	imdCff = Array{ComplexF64,3}(undef, 10, size(lPairs)[2], threads)
+	# Layer pair transfer coefficients. 
+	xfrCff = Array{ComplexF64,3}(undef, 4, size(lPairs)[2], threads)
+	## Define integrand functions compatible with cubature package. 
+	# Propagating waves integrand (no variable redefinition).
+	tfrIntPRTH!(evlPts, intVals) = tfrFncPRTH!(lVar, lPairs, evlPts, bdrArrL, bdrArrR, imdCff, xfrCff, intVals)
+	# Rapidly decaying waves (atan scaling), intDltInf sets effective upper bound as 
+	# tan(pi/2 - inDlt)
+	tfrIntEDTH!(evlPts, intVals) = tfrFncEDTH!(lVar, lPairs, evlPts, bdrArrL, bdrArrR, imdCff, xfrCff, intVals)
+	## Compute integrals.
+	# Up to light line.
+	htPairs .= hcubature_v(numLPairs, tfrIntPRTH!, [enrRng[1],0.0], [enrRng[2],1.0], reltol = cubTol, error_norm = Cubature.INDIVIDUAL)[1]
+	# Light line to rapidly decaying transition point.	
+	htPairs .+= hcubature_v(numLPairs, tfrIntPRTH!, [enrRng[1],1.0], [enrRng[2],wvcDecTrns], reltol = cubTol, error_norm = Cubature.INDIVIDUAL)[1]
+	# Transform transition point.
+	evaDecTrn = /(2.0 * atan(wvcDecTrns), pi)
+	# Compute decaying wave contribution. 
+	htPairs .+= hcubature_v(numLPairs, tfrIntEDTH!, [enrRng[1],evaDecTrn], [enrRng[2],1.0], reltol = cubTol, error_norm = Cubature.INDIVIDUAL)[1]
+	
 	return nothing
 end
 end 

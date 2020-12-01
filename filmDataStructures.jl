@@ -7,10 +7,12 @@ Each provided permittivity in the permittivity list is presumed to be constant w
 .bdrLoc: relative positions of interfaces, units of microns. 
 .tmpLst: assumed (constant) temperature of each layer in Kelvin.
 .rspPrf: permittivity values for each depth.
+.tfrFac: layer transfer factor, imaginary part of electric susceptibility for heat transfer. 
 """
 struct lyrDsc
 
 	bdrLoc::Array{Float64,1}
 	tmpLst::Array{Float64,1}
 	rspPrf::Any
+	tfrFac::Any
 end
